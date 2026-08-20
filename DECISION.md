@@ -6,7 +6,7 @@
 
 ## Executive Summary & Context
 
-This document preserves the complete historical and technical rationale for all architectural, mathematical, hardware, and operational decisions taken for the **Intelligent Cattle Fleet Management Platform**. Any developer, researcher, or AI coding assistant (Claude Code, OpenAI Codex, Antigravity, Cursor, etc.) must review this log before proposing or executing changes.
+This document preserves the complete historical and technical rationale for all architectural, mathematical, hardware, and operational decisions taken for the **Intelligent Cattle Fleet Management Platform**. Any developer, researcher, or AI coding assistant (Claude Code — primary) must review this log before proposing or executing changes.
 
 ---
 

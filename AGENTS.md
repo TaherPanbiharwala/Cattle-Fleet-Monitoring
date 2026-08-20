@@ -1,6 +1,6 @@
 # AGENTS.md — AI Agent Operating Manual & System Context
 **Intelligent Cattle Fleet Management Platform**
-*Target Audience: AI Coding Assistants (Claude Code, OpenAI Codex, Antigravity, Cursor, etc.) & Human Developers*
+*Target Audience: AI Coding Assistants (Claude Code — primary) & Human Developers*
 
 ---
 
