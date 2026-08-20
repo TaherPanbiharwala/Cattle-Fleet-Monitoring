@@ -1,0 +1,20 @@
+[project]
+name = "herd-simulator"
+version = "0.1.0"
+description = "Intelligent Cattle Fleet Management — Phase 1 Digital-Twin Simulator"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
