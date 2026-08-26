@@ -202,6 +202,9 @@ class Simulator:
     on_telemetry: Optional[Callable[[AnimalTelemetry], None]] = None
     on_transmit: Optional[Callable[[AnimalTelemetry], None]] = None
     on_event_activated: Optional[Callable[[str, int, str], None]] = None
+    on_event_expired: Optional[Callable[[str, int, str], None]] = None
+    on_event_cleared: Optional[Callable[[str, int, str], None]] = None
+    on_tick_complete: Optional[Callable[[list[AnimalTelemetry], int], None]] = None
 
     # Control flags
     paused: bool = False
@@ -288,8 +291,11 @@ def _process_cli_commands(sim: Simulator) -> None:
             _log_status(sim)
         elif cmd.command == CLICommandType.CLEAR:
             if cmd.animal_id is not None:
-                count = clear_all_events(sim.event_state, cmd.animal_id)
-                logger.info("CLI: cleared %d events on animal %d", count, cmd.animal_id)
+                cleared = clear_all_events(sim.event_state, cmd.animal_id)
+                logger.info("CLI: cleared %d events on animal %d", len(cleared), cmd.animal_id)
+                for evt_id, aid, etype in cleared:
+                    if sim.on_event_cleared:
+                        sim.on_event_cleared(evt_id, aid, etype)
         elif cmd.command in CLI_TO_EVENT_TYPE:
             if cmd.animal_id is not None:
                 evt_type = EventType(CLI_TO_EVENT_TYPE[cmd.command])
@@ -343,18 +349,24 @@ def tick(sim: Simulator) -> list[AnimalTelemetry]:
         ss,
         sim.scenario_cursor,
     )
-    # Priority-jump newly activated animals
+    # Priority-jump and notify for newly activated scenario events
     for evt_id in activated_ids:
-        for (aid, _), ae in sim.event_state.active.items():
-            if ae.event.event_id == evt_id and aid >= 2:
-                enqueue_priority(sim.scheduler_state, aid)
+        for (aid, etype), ae in sim.event_state.active.items():
+            if ae.event.event_id == evt_id:
+                if sim.on_event_activated:
+                    sim.on_event_activated(evt_id, aid, etype)
+                if aid >= 2:
+                    enqueue_priority(sim.scheduler_state, aid)
 
     # 1b. Auto-clear any scripted event whose duration has elapsed. Only
     # scenario-sourced events carry a duration — CLI/API-activated events
     # run until an explicit `clear` command (see expire_events docstring).
-    expired_ids = expire_events(sim.event_state, ss)
-    if expired_ids:
-        logger.info("Expired %d event(s): %s", len(expired_ids), expired_ids)
+    expired_info = expire_events(sim.event_state, ss)
+    if expired_info:
+        logger.info("Expired %d event(s): %s", len(expired_info), [e[0] for e in expired_info])
+        for evt_id, aid, etype in expired_info:
+            if sim.on_event_expired:
+                sim.on_event_expired(evt_id, aid, etype)
 
     # 2. Drain CLI commands
     _process_cli_commands(sim)
@@ -416,6 +428,10 @@ def tick(sim: Simulator) -> list[AnimalTelemetry]:
                     if t.animal_id == tx_id and sim.on_transmit:
                         sim.on_transmit(t)
                         break
+
+    # 7. Notify tick-complete listeners (ground truth, batch logging)
+    if telemetry and sim.on_tick_complete:
+        sim.on_tick_complete(telemetry, ss)
 
     return telemetry
 
