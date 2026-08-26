@@ -177,20 +177,23 @@ IoT/
 │   │   │   ├── scheduler.py        # Round-robin multiplexer & priority queue
 │   │   │   └── live_cli.py         # Terminal prompt for live fault injection
 │   │   ├── services/
-│   │   │   ├── thingspeak.py       # Ch.2 POST writer & Ch.1 GET sniffer
-│   │   │   ├── logger.py           # Telemetry CSV & 190-pair ground truth logger
-│   │   │   └── api_server.py       # REST API & static HUD server
-│   │   └── web/
+│   │   │   ├── logger.py           # Buffered per-run logging: 8 output files + ground truth
+│   │   │   ├── replay.py           # Telemetry CSV reader + normalization for determinism
+│   │   │   ├── thingspeak.py       # Ch.2 POST writer & Ch.1 GET sniffer (not yet built)
+│   │   │   └── api_server.py       # REST API & static HUD server (not yet built)
+│   │   └── web/                    # (not yet built)
 │   │       ├── index.html          # Leaflet.js live map & telemetry HUD
 │   │       ├── app.js
 │   │       └── style.css
-│   └── main.py                     # CLI entry point
+│   └── main.py                     # CLI entry point (not yet built — see ADR-017)
 └── tests/
     ├── test_golden_vectors.py      # Golden vector parity tests (THI, Risk, Geo)
     ├── test_config.py              # YAML validation guard tests (severity relationship checks)
     ├── test_models.py              # Unit tests for physiology, behaviour, movement
     ├── test_scenario_engine.py     # Fault injection & overlap policy tests
-    └── test_scheduler.py           # 15s floor, starvation prevention, sweep checks
+    ├── test_scheduler.py           # 15s floor, starvation prevention, sweep checks
+    ├── test_logger.py              # Per-run logging: buffered I/O, ground truth, determinism
+    └── test_replay.py              # Replay reader, normalization, end-to-end determinism
 ```
 
 ---
