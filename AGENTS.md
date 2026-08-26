@@ -108,6 +108,40 @@ The platform is designed around the reality that only **one physical collar (ESP
 * **Composite Risk Score:**
   $$\text{risk} = \text{round}\left(100 \times \left(1 - \prod_{i} (1 - S_i)\right)\right) \in [0, 100]$$
 
+### 4.3 Scenario JSON Contract
+
+Declarative fault-injection scenarios (`--scenario config/scenarios/*.json`) use this shape, enforced by `scenario_runner.load_scenario()`, which fails fast on any violation before the run starts (see ADR-016):
+
+```json
+{
+  "schema_version": 1,
+  "scenario_id": "demo_scenario",
+  "seed": 42,
+  "events": [
+    {
+      "animal_id": 5,
+      "type": "fever_onset",
+      "start_sim_second": 300,
+      "duration_seconds": 1200,
+      "event_id": "demo-fever-1",
+      "params": {"peak_offset_c": 1.8}
+    }
+  ]
+}
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `type` | Yes | One of `fever_onset, heat_stress, geofence_breach, tamper, social_isolation, collar_dropout` |
+| `start_sim_second` | Yes | When the event activates |
+| `duration_seconds` | Yes, positive | Event auto-clears `duration_seconds` after activation |
+| `event_id` | No | Auto-generated as `<scenario_id>-<index>` if omitted; must be unique in the file |
+| `params` | No | Merged over per-type defaults in `scenario_runner._DEFAULT_PARAMS` |
+
+**Validated before startup:** unknown `type`, duplicate `event_id`, invalid `animal_id` (when the loader is given the herd's valid ID range), non-positive `duration_seconds`, and any two events of the **same type on the same animal** with overlapping `[start_sim_second, start_sim_second + duration_seconds)` windows. Different event types on the same animal, or the same type on different animals, may overlap freely — that's what lets faults compose.
+
+Events activated live via the CLI/API (not from a scenario file) carry no `duration_seconds` and run until an explicit `clear <id>` — auto-expiry only applies to the scripted timeline.
+
 ---
 
 ## 5. Repository Structure

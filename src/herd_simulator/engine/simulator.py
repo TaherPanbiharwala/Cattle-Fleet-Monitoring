@@ -49,6 +49,7 @@ from herd_simulator.engine.scenario_runner import (
     ScenarioEvent,
     activate_event,
     clear_all_events,
+    expire_events,
     get_active_event,
     get_all_active_for_animal,
     get_event_codes_for_status,
@@ -340,6 +341,13 @@ def tick(sim: Simulator) -> list[AnimalTelemetry]:
         for (aid, _), ae in sim.event_state.active.items():
             if ae.event.event_id == evt_id and aid >= 2:
                 enqueue_priority(sim.scheduler_state, aid)
+
+    # 1b. Auto-clear any scripted event whose duration has elapsed. Only
+    # scenario-sourced events carry a duration — CLI/API-activated events
+    # run until an explicit `clear` command (see expire_events docstring).
+    expired_ids = expire_events(sim.event_state, ss)
+    if expired_ids:
+        logger.info("Expired %d event(s): %s", len(expired_ids), expired_ids)
 
     # 2. Drain CLI commands
     _process_cli_commands(sim)
