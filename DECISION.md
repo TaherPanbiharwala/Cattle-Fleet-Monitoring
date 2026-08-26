@@ -1,6 +1,6 @@
 # Architecture Decision Record (ADR) & Project Decision Log
 **Intelligent Cattle Fleet Management Platform**
-*Last Updated: 2026-08-26 · Status: Active / Approved*
+*Last Updated: 2026-08-27 · Status: Active / Approved*
 
 ---
 
@@ -29,6 +29,7 @@ This document preserves the complete historical and technical rationale for all 
 - [ADR-015: Machine Learning Dataset, Evaluation, and Diagnostic Guardrails](#adr-015-machine-learning-dataset-evaluation-and-diagnostic-guardrails)
 - [ADR-016: Scenario JSON Contract Correction (Deliverable #3 Fix)](#adr-016-scenario-json-contract-correction-deliverable-3-fix)
 - [ADR-017: Pre-Landing Review Fixes — Deliverables #1-#3](#adr-017-pre-landing-review-fixes--deliverables-1-3)
+- [ADR-018: Logging, Ground Truth & Replay Architecture (Deliverable #4)](#adr-018-logging-ground-truth--replay-architecture-deliverable-4)
 
 ---
 
@@ -255,3 +256,20 @@ This document preserves the complete historical and technical rationale for all 
     * `src/main.py` (AGENTS.md §6's CLI entry point) does not exist. `create_simulator()`/`run_simulation()` are fully functional as library calls (proven by the dry-run integration tests) but none of AGENTS.md's five documented `--mode` invocations are runnable yet. This is net-new feature work, not a defect in existing code — scoped as its own follow-up deliverable step, not folded into a review pass.
   * **Left alone (not a gap):** 6 imports in `simulator.py` flagged unused by pyflakes (`get_queue_snapshot`, `get_all_active_for_animal`, `step_centroid_anchored`, `validate_body_temp`, `individual_offset_m`, `ActiveEvent`) — these read as intentional placeholders for the not-yet-built REST API, HUD, and Collar-1-sniffing wiring, not dead code, so they were not stripped.
 * **Consequences:** Both deferred items are now explicit, tracked gaps rather than undocumented behavior. Whoever builds Channel-1 sniffing must also revisit ID 1's tick-loop treatment. Whoever builds the CLI entry point should treat `main.py` as net-new scope with its own review, not bundle it into an unrelated change. 197 tests pass (was 190 before this review).
+
+---
+
+## ADR-018: Logging, Ground Truth & Replay Architecture (Deliverable #4)
+
+* **Status:** Approved
+* **Context:** Deliverables #1-#3 built a fully functional simulation engine (20 cattle, 1-second tick loop, deterministic risk scoring, fault injection), but it wrote nothing to disk. The Master PRD requires per-run structured logging (8 output files), C(20,2)=190 pairwise ground-truth distances per tick, buffered I/O, a replay reader, and normalization for deterministic verification — all without modifying the core simulation loop's logic.
+* **Decision:**
+  * **Callback-based event lifecycle observability:** Added 3 new callback fields to `Simulator` (`on_event_expired`, `on_event_cleared`, `on_tick_complete`) alongside the existing 3 (`on_telemetry`, `on_transmit`, `on_event_activated`). The logger registers 6 closures via `wire_logger(sim, rl)`, observing the full lifecycle without coupling to the tick loop. This preserves the functional-style separation: the engine produces data, services consume it.
+  * **Enriched return types on `expire_events()` and `clear_all_events()`:** Changed from `list[str]` / `int` to `list[tuple[str, int, str]]` (event_id, animal_id, event_type). The logger needs all three fields to write meaningful JSONL records. Minimal test impact (1 assertion changed).
+  * **Scenario-sourced events now trigger `on_event_activated`:** Previously only CLI-injected events fired this callback. Fixed by adding the dispatch in `tick()`'s scenario-processing block, so the logger captures all activations regardless of source.
+  * **`on_tick_complete` for ground truth batching:** `on_telemetry` fires per-animal, but ground truth requires all 20 positions simultaneously. `on_tick_complete(telemetry_batch, sim_second)` fires once at the end of each tick with the full batch, enabling `itertools.combinations` over sorted positions for the 190-pair Haversine matrix.
+  * **Buffered I/O with configurable flush interval:** `BufferedWriter` accumulates lines in memory and flushes to disk every `buffer_size` lines (default 100 from `config/default_config.yaml`). This avoids per-row `write()` syscalls during high-speed dry-runs while keeping memory bounded.
+  * **8 output files per run:** Each run creates `logs/run_{timestamp}_{run_id[:8]}/` containing: `manifest.json` (run identity + config hash), `config.snapshot.json` (full config at time of run), `animal_profiles.json` (per-cow baselines), `telemetry.csv` (17-column, 6dp floats), `events.jsonl` (activated/expired/cleared lifecycle), `transmissions.jsonl` (scheduler uplink records), `ground_truth_pairs.csv` (190 pairwise distances + anomaly flags), `summary.json` (aggregate counters).
+  * **Normalization contract for determinism verification:** `normalize_telemetry_csv()` strips `run_id`, rounds all floats to 6 decimal places, and sorts by `(sim_second, animal_id)`. `normalize_manifest()` strips `run_id`, `start_time_iso`, and `config_hash`. Two dry-runs with identical seed/config/scenario produce byte-identical normalized output — proven by integration test.
+  * **Replay reader (`replay.py`):** `load_replay()` yields typed `ReplayRow` objects sorted by `(sim_second, animal_id)`. Pipe-separated event codes are parsed into `list[str]`. The reader is the foundation for the future `--mode replay` CLI command (deferred to when `main.py` is built).
+* **Consequences:** 246 tests pass (197 existing + 38 logger + 11 replay). The logging service is fully wired and functional via `create_run_logger()` + `wire_logger()` + `close_logger()` — these can be called from any entry point. `main.py` remains deferred (ADR-017). The replay reader is ready for the future replay mode but does not depend on it.

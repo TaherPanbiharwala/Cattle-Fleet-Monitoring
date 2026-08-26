@@ -349,13 +349,21 @@ def clear_event(state: EventState, animal_id: int, event_type: EventType) -> boo
     return False
 
 
-def clear_all_events(state: EventState, animal_id: int) -> int:
-    """Clear all active events on a specific animal. Returns count cleared."""
+def clear_all_events(
+    state: EventState, animal_id: int,
+) -> list[tuple[str, int, str]]:
+    """Clear all active events on a specific animal.
+
+    Returns list of (event_id, animal_id, event_type_value) for each cleared event.
+    """
     to_remove = [k for k in state.active if k[0] == animal_id]
+    cleared: list[tuple[str, int, str]] = []
     for k in to_remove:
-        state.active[k].cleared = True
+        ae = state.active[k]
+        cleared.append((ae.event.event_id or "", k[0], k[1]))
+        ae.cleared = True
         del state.active[k]
-    return len(to_remove)
+    return cleared
 
 
 def clear_event_by_id(state: EventState, event_id: str) -> bool:
@@ -368,22 +376,25 @@ def clear_event_by_id(state: EventState, event_id: str) -> bool:
     return False
 
 
-def expire_events(state: EventState, sim_second: int) -> list[str]:
+def expire_events(
+    state: EventState, sim_second: int,
+) -> list[tuple[str, int, str]]:
     """Auto-clear any active event whose scripted duration has elapsed.
 
     Only events with a non-None `duration_seconds` are eligible — events
     activated live via CLI/API (`duration_seconds=None`) run until an
-    explicit `clear` command, by design. Returns the event_ids cleared.
+    explicit `clear` command, by design.
 
+    Returns list of (event_id, animal_id, event_type_value) for each expired event.
     Intended to be called once per tick, alongside `process_scheduled_events`.
     """
-    expired: list[str] = []
+    expired: list[tuple[str, int, str]] = []
     for key, ae in list(state.active.items()):
         duration = ae.event.duration_seconds
         if duration is not None and sim_second - ae.activated_at >= duration:
+            expired.append((ae.event.event_id or "", key[0], key[1]))
             ae.cleared = True
             del state.active[key]
-            expired.append(ae.event.event_id or "")
     return expired
 
 

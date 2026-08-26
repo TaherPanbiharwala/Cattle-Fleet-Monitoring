@@ -280,8 +280,8 @@ class TestEventLifecycle:
         state = new_event_state()
         activate_event(state, 5, EventType.FEVER_ONSET, sim_second=100)
         activate_event(state, 5, EventType.TAMPER, sim_second=100)
-        count = clear_all_events(state, 5)
-        assert count == 2
+        cleared = clear_all_events(state, 5)
+        assert len(cleared) == 2
         assert not is_event_active(state, 5, EventType.FEVER_ONSET)
         assert not is_event_active(state, 5, EventType.TAMPER)
 
