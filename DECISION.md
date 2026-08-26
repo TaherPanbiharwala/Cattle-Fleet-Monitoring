@@ -1,6 +1,6 @@
 # Architecture Decision Record (ADR) & Project Decision Log
 **Intelligent Cattle Fleet Management Platform**
-*Last Updated: 2026-08-20 · Status: Active / Approved*
+*Last Updated: 2026-08-26 · Status: Active / Approved*
 
 ---
 
@@ -27,6 +27,7 @@ This document preserves the complete historical and technical rationale for all 
 - [ADR-013: 190-Pair Ground-Truth Matrix Logging](#adr-013-190-pair-ground-truth-matrix-logging)
 - [ADR-014: Dual Fault-Injection Engine (Declarative JSON + Live CLI)](#adr-014-dual-fault-injection-engine-declarative-json--live-cli)
 - [ADR-015: Machine Learning Dataset, Evaluation, and Diagnostic Guardrails](#adr-015-machine-learning-dataset-evaluation-and-diagnostic-guardrails)
+- [ADR-016: Scenario JSON Contract Correction (Deliverable #3 Fix)](#adr-016-scenario-json-contract-correction-deliverable-3-fix)
 
 ---
 
@@ -221,3 +222,15 @@ This document preserves the complete historical and technical rationale for all 
   * Use the public **WASP-lab** cattle dataset (Morales-Vargas et al., 2025) for IMU behavior benchmarks.
   * **Validation Rule:** Use **cow-grouped cross-validation** (never split windows from the same cow or event across train and test sets).
   * **Diagnostic Safety Guardrail:** The system outputs "predicted risk score" or "anomaly indicator". It **never** outputs a clinical veterinary diagnosis or recommends medical treatment.
+
+---
+
+## ADR-016: Scenario JSON Contract Correction (Deliverable #3 Fix)
+
+* **Status:** Approved
+* **Context:** Deliverable #3's initial `scenario_runner.py` used a bare JSON array with `sim_second`/`event` fields and no `duration_seconds`, which did not match the scenario contract already specified in the Master PRD ("Scenario JSON contains `schema_version`, `scenario_id`, `seed`, and `events`. Each event contains `animal_id`, `type`, `start_sim_second`, `duration_seconds`, and typed parameters... Unknown types, duplicate event IDs, invalid cattle IDs, and non-positive duration fail before startup. The same event type cannot overlap itself for the same cow."). Without `duration_seconds`, a scripted event had no way to end on its own — `fever_onset` happened to taper off via its own onset/plateau/recovery ramp, but `heat_stress`, `geofence_breach`, `social_isolation`, and `tamper` would stay active for the rest of the run unless manually cleared.
+* **Decision:**
+  * Scenario JSON top-level shape is `{schema_version, scenario_id, seed, events}`; each event is `{animal_id, type, start_sim_second, duration_seconds, event_id?, params?}` (documented in full in AGENTS.md §4.3).
+  * `load_scenario()` validates all four "fail before startup" rules — unknown `type`, duplicate `event_id`, invalid `animal_id` (when the caller supplies the herd's valid ID range), non-positive `duration_seconds` — plus same-type self-overlap across the scripted timeline, before returning.
+  * `duration_seconds` is required for scenario-file events and drives auto-expiry (`expire_events()`, called once per tick from `simulator.tick()`). It is `None` for events activated live via CLI/API, which continue running until an explicit `clear` command — the self-overlap rule and auto-expiry govern the static scripted timeline, not interactive re-triggering of the same fault.
+* **Consequences:** Any scenario JSON written against the old bare-array format must be rewritten to the wrapped format. `config/scenarios/demo_scenario.json` and `fault_injection.json` (Deliverable #7, not yet created) must be authored against the format documented here and in AGENTS.md §4.3, not the original Deliverable #3 implementation.
