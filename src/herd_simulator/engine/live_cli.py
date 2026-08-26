@@ -115,6 +115,8 @@ def parse_command(raw: str) -> Optional[CLICommand]:
     # Handle aliases
     if verb in ("exit", "q"):
         verb = "quit"
+    elif verb == "isolation":  # Master PRD's documented verb; "isolate" is the short form
+        verb = "isolate"
 
     # Match verb
     try:

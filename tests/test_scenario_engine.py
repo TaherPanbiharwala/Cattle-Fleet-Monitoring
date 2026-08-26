@@ -586,6 +586,23 @@ class TestSimulatorIntegration:
         assert t5.dropped_out is True
         assert t5.battery_pct == 0.0
 
+    def test_dropout_reports_critical_not_fabricated_healthy(self, cfg):
+        """Master PRD: 'the HUD marks the cow stale and critical instead
+        of fabricating a current score' — must not report risk_score=0 /
+        alert_band='green' just because no fresh data exists."""
+        sim = create_simulator(cfg, SimMode.DRY_RUN)
+        activate_event(sim.event_state, 5, EventType.COLLAR_DROPOUT, sim.clock.sim_second)
+        telemetry = tick(sim)
+        t5 = [t for t in telemetry if t.animal_id == 5][0]
+        assert t5.risk_score == 100
+        assert t5.alert_band == "red"
+
+        # And on every subsequent tick, once dropped_out latches via battery.
+        telemetry = tick(sim)
+        t5 = [t for t in telemetry if t.animal_id == 5][0]
+        assert t5.risk_score == 100
+        assert t5.alert_band == "red"
+
     def test_deterministic_same_seed(self, cfg):
         """Two runs with the same config/seed produce identical first-tick telemetry."""
         sim1 = create_simulator(cfg, SimMode.DRY_RUN)

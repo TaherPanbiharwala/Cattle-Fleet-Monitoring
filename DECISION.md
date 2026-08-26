@@ -28,6 +28,7 @@ This document preserves the complete historical and technical rationale for all 
 - [ADR-014: Dual Fault-Injection Engine (Declarative JSON + Live CLI)](#adr-014-dual-fault-injection-engine-declarative-json--live-cli)
 - [ADR-015: Machine Learning Dataset, Evaluation, and Diagnostic Guardrails](#adr-015-machine-learning-dataset-evaluation-and-diagnostic-guardrails)
 - [ADR-016: Scenario JSON Contract Correction (Deliverable #3 Fix)](#adr-016-scenario-json-contract-correction-deliverable-3-fix)
+- [ADR-017: Pre-Landing Review Fixes — Deliverables #1-#3](#adr-017-pre-landing-review-fixes--deliverables-1-3)
 
 ---
 
@@ -234,3 +235,23 @@ This document preserves the complete historical and technical rationale for all 
   * `load_scenario()` validates all four "fail before startup" rules — unknown `type`, duplicate `event_id`, invalid `animal_id` (when the caller supplies the herd's valid ID range), non-positive `duration_seconds` — plus same-type self-overlap across the scripted timeline, before returning.
   * `duration_seconds` is required for scenario-file events and drives auto-expiry (`expire_events()`, called once per tick from `simulator.tick()`). It is `None` for events activated live via CLI/API, which continue running until an explicit `clear` command — the self-overlap rule and auto-expiry govern the static scripted timeline, not interactive re-triggering of the same fault.
 * **Consequences:** Any scenario JSON written against the old bare-array format must be rewritten to the wrapped format. `config/scenarios/demo_scenario.json` and `fault_injection.json` (Deliverable #7, not yet created) must be authored against the format documented here and in AGENTS.md §4.3, not the original Deliverable #3 implementation.
+
+---
+
+## ADR-017: Pre-Landing Review Fixes — Deliverables #1-#3
+
+* **Status:** Approved
+* **Context:** A structural pre-landing review across Deliverables #1-#3 (foundation, animal models, simulation engine — 4,766 lines total) evaluated the code against the Master PRD and AGENTS.md's own golden rules and surfaced seven issues.
+* **Decision:**
+  * **Fixed:**
+    * `config.py` now rejects `risk.severity.temp_offset_high <= temp_offset_low` and `thi_high <= thi_low` at load time. `risk.py` divides by these differences with no zero-guard, so a misconfigured or swapped pair previously would not fail until the tick loop actually ran, crashing it with `ZeroDivisionError`.
+    * Dropout telemetry (both the battery-exhaustion and `collar_dropout`-event paths in `simulator._tick_animal`) now reports `risk_score=100, alert_band="red"` instead of a fabricated `0`/`"green"` — matching the Master PRD's explicit requirement that "the HUD marks the cow stale and critical instead of fabricating a current score." `dropped_out=True` alone was not enough; a healthy-looking score actively contradicted it. Codified in AGENTS.md golden rule 3.
+    * `movement.breach_excursion_target()`'s outward search now scales with the pasture polygon's own vertex-to-vertex diameter instead of a fixed 1km cap, which silently failed — returning a "breach target" still inside the polygon — for any configured pasture larger than that.
+    * `live_cli.py` accepts `isolation` as an alias for `isolate`, matching the Master PRD's documented live-command verb (the shorter `isolate` still works — additive, not a rename).
+    * `simulator.py`'s module docstring corrected to accurately describe how its 10-step tick loop maps onto ADR-014's actual 6-stage composition order (the docstring had drifted to a different, incorrect ordering that didn't match ADR-014's text).
+    * `config.py` and `simulator.py`: removed 4 dead imports (`re`, `field`, `math`, `typing.Any`) left over from earlier drafts.
+  * **Deferred, with rationale recorded here so it isn't silently re-discovered:**
+    * ID 1 (the physical collar) still receives full physiology/behaviour/movement/battery/risk simulation every tick, contradicting "ID 1 is offline/grey until Channel 1 returns a fresh physical-collar record" (ADR-002). Not fixed now because the correct placeholder behavior depends on the not-yet-built Channel-1 sniffing integration (ADR-010) — building it prematurely risks a second rewrite once that integration lands. The scheduler already correctly excludes ID 1 from Channel-2 transmission, so nothing leaks to ThingSpeak today.
+    * `src/main.py` (AGENTS.md §6's CLI entry point) does not exist. `create_simulator()`/`run_simulation()` are fully functional as library calls (proven by the dry-run integration tests) but none of AGENTS.md's five documented `--mode` invocations are runnable yet. This is net-new feature work, not a defect in existing code — scoped as its own follow-up deliverable step, not folded into a review pass.
+  * **Left alone (not a gap):** 6 imports in `simulator.py` flagged unused by pyflakes (`get_queue_snapshot`, `get_all_active_for_animal`, `step_centroid_anchored`, `validate_body_temp`, `individual_offset_m`, `ActiveEvent`) — these read as intentional placeholders for the not-yet-built REST API, HUD, and Collar-1-sniffing wiring, not dead code, so they were not stripped.
+* **Consequences:** Both deferred items are now explicit, tracked gaps rather than undocumented behavior. Whoever builds Channel-1 sniffing must also revisit ID 1's tick-loop treatment. Whoever builds the CLI entry point should treat `main.py` as net-new scope with its own review, not bundle it into an unrelated change. 197 tests pass (was 190 before this review).

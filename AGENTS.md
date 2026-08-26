@@ -67,7 +67,7 @@ The platform is designed around the reality that only **one physical collar (ESP
    - Default posting cadence for Channel 2 multiplexer is **30 seconds**.
    - Keep combined annual usage strictly below 3,000,000 writes (~8,200 writes/day).
 3. **No Solar Recharge:**
-   Collar hardware has no solar panels. Battery level (0–100%) must only deplete based on activity drain ($1\times$ base, $3\times$ during breach/alert bursts). When battery hits 0%, collar triggers dropout.
+   Collar hardware has no solar panels. Battery level (0–100%) must only deplete based on activity drain ($1\times$ base, $3\times$ during breach/alert bursts). When battery hits 0%, collar triggers dropout. Dropout telemetry must report as **stale and critical** (`risk_score=100`, red band) — never a fabricated healthy score just because no fresh data exists (see ADR-017; this was violated once already and fixed).
 4. **Strict Mathematical Determinism:**
    Given the same configuration, scenario, and random seed (default `42`), the simulation must produce byte-identical normalized telemetry across runs.
 5. **No Secrets in Code:**
@@ -187,6 +187,7 @@ IoT/
 │   └── main.py                     # CLI entry point
 └── tests/
     ├── test_golden_vectors.py      # Golden vector parity tests (THI, Risk, Geo)
+    ├── test_config.py              # YAML validation guard tests (severity relationship checks)
     ├── test_models.py              # Unit tests for physiology, behaviour, movement
     ├── test_scenario_engine.py     # Fault injection & overlap policy tests
     └── test_scheduler.py           # 15s floor, starvation prevention, sweep checks

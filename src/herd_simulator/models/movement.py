@@ -207,7 +207,19 @@ def isolation_extra_distance_m(elapsed_s: float, rate_m_per_s: float = ISOLATION
 
 
 _BREACH_SEARCH_STEP_M = 5.0
-_BREACH_SEARCH_MAX_STEPS = 200  # 200 * 5m = 1km search radius — well beyond any pasture-scale polygon
+_BREACH_SEARCH_MIN_STEPS = 200  # 200 * 5m = 1km floor — generous for the default ~200m pasture
+
+
+def _polygon_diameter_m(polygon: list[Coord]) -> float:
+    """Max distance between any two vertices — a safe upper bound on how
+    far a straight ray must travel to cross the polygon from any interior
+    point (any two interior points are at most this far apart)."""
+    max_dist = 0.0
+    n = len(polygon)
+    for i in range(n):
+        for j in range(i + 1, n):
+            max_dist = max(max_dist, haversine_m(polygon[i], polygon[j]))
+    return max_dist
 
 
 def breach_excursion_target(position: Coord, polygon: list[Coord], outward_m: float = 20.0) -> Coord:
@@ -222,13 +234,24 @@ def breach_excursion_target(position: Coord, polygon: list[Coord], outward_m: fl
     teleporting it outside. A fixed step count bounds the search — this is
     a target-finder, not a per-tick mover, so it does not need to respect
     `centroid_speed_m_per_s`.
+
+    The search radius scales with the polygon's own vertex-to-vertex
+    diameter (with a floor at `_BREACH_SEARCH_MIN_STEPS`), so it works for
+    whatever pasture size a config actually declares — a fixed 1km cap
+    would silently fail (return a "target" still inside the polygon) for
+    any pasture larger than that.
     """
     centroid_lat = sum(p[0] for p in polygon) / len(polygon)
     centroid_lon = sum(p[1] for p in polygon) / len(polygon)
     bearing = math.atan2(position[1] - centroid_lon, position[0] - centroid_lat)
 
+    # 1.5x diameter margin covers non-convex shapes where a straight ray
+    # can briefly re-enter the polygon after crossing an edge.
+    search_radius_m = _polygon_diameter_m(polygon) * 1.5
+    max_steps = max(_BREACH_SEARCH_MIN_STEPS, int(search_radius_m / _BREACH_SEARCH_STEP_M) + 1)
+
     point = position
-    for _ in range(_BREACH_SEARCH_MAX_STEPS):
+    for _ in range(max_steps):
         if not point_in_polygon(point, polygon):
             break
         point = offset_to_latlon(

@@ -496,6 +496,23 @@ class TestBreachExcursionTarget:
         target = movement.breach_excursion_target(near_north_edge, PASTURE_RECT, outward_m=15.0)
         assert not point_in_polygon(target, PASTURE_RECT)
 
+    def test_scales_beyond_default_search_floor_for_large_pastures(self):
+        """A pasture larger than the old fixed 1km search cap must still
+        find a genuine outside point, not silently return one still inside
+        (the bug: a fixed step count times a fixed step size stops
+        searching before reaching the boundary of a big-enough polygon)."""
+        large_center = (12.9716, 79.1589)
+        large_pasture = [
+            (large_center[0] + 0.02, large_center[1] - 0.02),
+            (large_center[0] + 0.02, large_center[1] + 0.02),
+            (large_center[0] - 0.02, large_center[1] + 0.02),
+            (large_center[0] - 0.02, large_center[1] - 0.02),
+        ]
+        assert movement._polygon_diameter_m(large_pasture) > 1000.0  # confirms this exercises the fix
+
+        target = movement.breach_excursion_target(large_center, large_pasture, outward_m=20.0)
+        assert not point_in_polygon(target, large_pasture)
+
 
 # ===================================================================
 # 5. Animal Profile & State

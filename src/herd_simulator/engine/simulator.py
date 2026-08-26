@@ -2,16 +2,24 @@
 simulator.py — 1-second tick loop coordinator with SimClock abstraction.
 
 This is the central orchestrator that ties together all subsystems.
-Each tick follows the ADR-014 composition order:
-  1. Process scheduled scenario events
-  2. Drain live CLI command queue
-  3. Physiology (body temp, ambient temp, THI, fever ramp)
-  4. Behaviour (Markov state transitions)
-  5. Movement (centroid drift, individual positions, breach/isolation excursions)
-  6. Battery (activity-aware drain)
-  7. Risk scoring (product-rule composite)
-  8. Geofence classification
-  9. Scheduler (decide who transmits next)
+Each tick processes, in order:
+  1. Scheduled scenario events (activation)
+  2. Live CLI command queue (activation)
+  3. Auto-expiry of scripted events whose duration has elapsed
+  4. Physiology (body temp, ambient temp, THI, fever ramp)
+  5. Behaviour (Markov state transitions)
+  6. Movement — the ADR-014 "Social State" stage: centroid drift, individual
+     positions, isolation drift, breach excursions
+  7. Battery (activity-aware drain)
+  8. Risk scoring — folds in the ADR-014 "Collar Faults" stage (tamper) —
+     via the product-rule composite
+  9. Geofence classification
+  10. Scheduler (the ADR-014 "Transmission" stage: decide who transmits next)
+
+This is a finer-grained breakdown of ADR-014's own composition order
+(Physiology -> Movement -> Social State -> Collar Faults -> Risk
+Calculation -> Transmission); "Social State" and "Collar Faults" aren't
+separate function calls here, they're folded into steps 6 and 8 above.
 
 SimClock abstraction (ADR-012):
   - dry-run mode:  ticks as fast as possible, sim_second increments by 1 each loop
@@ -28,13 +36,12 @@ References:
 from __future__ import annotations
 
 import logging
-import math
 import random
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from queue import Empty, Queue
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 from herd_simulator.config import SimulatorConfig
 from herd_simulator.engine.live_cli import (
@@ -429,8 +436,11 @@ def _tick_animal(sim: Simulator, state: AnimalState, ss: int, hour: float) -> An
             behaviour=state.behaviour.value,
             latitude=state.position[0],
             longitude=state.position[1],
-            risk_score=0,
-            alert_band="green",
+            # Master PRD: "Dropout suppresses transmission; the HUD marks
+            # the cow stale and critical instead of fabricating a current
+            # score" — 100/red, not a fabricated healthy 0/green.
+            risk_score=100,
+            alert_band="red",
             geofence_status=0,
             battery_pct=0.0,
             event_codes=["DROPOUT"],
@@ -450,8 +460,11 @@ def _tick_animal(sim: Simulator, state: AnimalState, ss: int, hour: float) -> An
             behaviour=state.behaviour.value,
             latitude=state.position[0],
             longitude=state.position[1],
-            risk_score=0,
-            alert_band="green",
+            # Master PRD: "Dropout suppresses transmission; the HUD marks
+            # the cow stale and critical instead of fabricating a current
+            # score" — 100/red, not a fabricated healthy 0/green.
+            risk_score=100,
+            alert_band="red",
             geofence_status=0,
             battery_pct=0.0,
             event_codes=["DROPOUT"],

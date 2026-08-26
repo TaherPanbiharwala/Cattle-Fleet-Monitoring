@@ -16,8 +16,7 @@ References:
 from __future__ import annotations
 
 import os
-import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -336,6 +335,19 @@ def load_config(path: str | Path) -> SimulatorConfig:
         social_isolation=float(_require(sev_raw, "social_isolation", "risk.severity")),
         collar_tamper=float(_require(sev_raw, "collar_tamper", "risk.severity")),
     )
+    # risk.py divides by (temp_offset_high - temp_offset_low) and
+    # (thi_high - thi_low) with no zero-guard, so a misconfigured or
+    # swapped pair here would crash the tick loop with ZeroDivisionError.
+    if severity.temp_offset_high <= severity.temp_offset_low:
+        raise ConfigError(
+            "risk.severity.temp_offset_high", severity.temp_offset_high,
+            f"> temp_offset_low ({severity.temp_offset_low})",
+        )
+    if severity.thi_high <= severity.thi_low:
+        raise ConfigError(
+            "risk.severity.thi_high", severity.thi_high,
+            f"> thi_low ({severity.thi_low})",
+        )
     ab_raw = _require_type(risk_raw, "alert_bands", dict, "risk")
     alert_bands = AlertBands(
         green_max=_require_int_range(ab_raw, "green_max", 0, 100, "risk.alert_bands"),
