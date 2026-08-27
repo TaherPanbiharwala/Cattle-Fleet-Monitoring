@@ -1,3 +1,9 @@
+from herd_simulator.services.api_server import (
+    HudServer,
+    HudState,
+    create_hud_state,
+    wire_api_server,
+)
 from herd_simulator.services.logger import (
     RunLogger,
     close_logger,
@@ -19,6 +25,10 @@ from herd_simulator.services.thingspeak import (
 )
 
 __all__ = [
+    "HudServer",
+    "HudState",
+    "create_hud_state",
+    "wire_api_server",
     "RunLogger",
     "close_logger",
     "create_run_logger",
