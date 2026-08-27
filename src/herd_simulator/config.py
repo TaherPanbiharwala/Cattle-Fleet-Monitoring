@@ -169,10 +169,13 @@ class ThingSpeakConfig:
     write_cadence_s: int
     breach_cadence_s: int
     min_interval_s: int
+    channel_1_id: str
     channel_1_sniff_interval_s: int
     channel_1_stale_threshold_s: int
     backoff_base_s: int
     backoff_max_s: int
+    annual_write_limit: int
+    quota_warning_pct: int
 
 
 @dataclass(frozen=True)
@@ -357,15 +360,24 @@ def load_config(path: str | Path) -> SimulatorConfig:
 
     # --- thingspeak ---
     ts_raw = _require_type(raw, "thingspeak", dict)
+    annual_limit_raw = int(ts_raw.get("annual_write_limit", 3_000_000))
+    if annual_limit_raw <= 0:
+        raise ConfigError("thingspeak.annual_write_limit", annual_limit_raw, "> 0")
+    quota_warn_raw = int(ts_raw.get("quota_warning_pct", 90))
+    if not 1 <= quota_warn_raw <= 100:
+        raise ConfigError("thingspeak.quota_warning_pct", quota_warn_raw, "1–100")
     thingspeak = ThingSpeakConfig(
         channel_2_id=str(ts_raw.get("channel_2_id", "")),
         write_cadence_s=_require_int_range(ts_raw, "write_cadence_s", 15, 3600, "thingspeak"),
         breach_cadence_s=_require_int_range(ts_raw, "breach_cadence_s", 15, 3600, "thingspeak"),
         min_interval_s=_require_int_range(ts_raw, "min_interval_s", 15, 3600, "thingspeak"),
+        channel_1_id=str(ts_raw.get("channel_1_id", "")),
         channel_1_sniff_interval_s=_require_int_range(ts_raw, "channel_1_sniff_interval_s", 15, 3600, "thingspeak"),
         channel_1_stale_threshold_s=_require_int_range(ts_raw, "channel_1_stale_threshold_s", 30, 7200, "thingspeak"),
         backoff_base_s=_require_int_range(ts_raw, "backoff_base_s", 1, 60, "thingspeak"),
         backoff_max_s=_require_int_range(ts_raw, "backoff_max_s", 1, 300, "thingspeak"),
+        annual_write_limit=annual_limit_raw,
+        quota_warning_pct=quota_warn_raw,
     )
     # Enforce 15s floor invariant (ADR-004)
     if thingspeak.min_interval_s < 15:

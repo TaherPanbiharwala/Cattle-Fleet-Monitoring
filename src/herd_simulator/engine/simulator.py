@@ -206,6 +206,10 @@ class Simulator:
     on_event_cleared: Optional[Callable[[str, int, str], None]] = None
     on_tick_complete: Optional[Callable[[list[AnimalTelemetry], int], None]] = None
 
+    # Collar-1 anchor for centroid sniffing (ADR-010)
+    collar1_anchor: Optional[Coord] = None
+    collar1_anchor_time: float = 0.0
+
     # Control flags
     paused: bool = False
     running: bool = True
@@ -391,14 +395,21 @@ def tick(sim: Simulator) -> list[AnimalTelemetry]:
 
     sim._thi = compute_thi(sim._ambient_temp_c, sim._humidity_pct)
 
-    # 4. Update centroid (autonomous drift — no Collar-1 sniffing in P1 sim-only mode)
-    sim.centroid = step_centroid_autonomous(
-        sim.centroid,
-        sim.cfg.movement,
-        sim.cfg.pasture_polygon,
-        1.0,
-        sim.weather_rng,
-    )
+    # 4. Update centroid — anchored to Collar-1 if fresh fix available (ADR-010)
+    _stale = sim.cfg.thingspeak.channel_1_stale_threshold_s
+    if (sim.clock.mode == SimMode.LIVE
+            and sim.collar1_anchor is not None
+            and (time.monotonic() - sim.collar1_anchor_time) < _stale):
+        sim.centroid = step_centroid_anchored(
+            sim.centroid, sim.collar1_anchor, sim.cfg.movement, 1.0)
+    else:
+        sim.centroid = step_centroid_autonomous(
+            sim.centroid,
+            sim.cfg.movement,
+            sim.cfg.pasture_polygon,
+            1.0,
+            sim.weather_rng,
+        )
 
     # 5. Per-animal tick
     telemetry: list[AnimalTelemetry] = []

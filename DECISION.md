@@ -30,6 +30,7 @@ This document preserves the complete historical and technical rationale for all 
 - [ADR-016: Scenario JSON Contract Correction (Deliverable #3 Fix)](#adr-016-scenario-json-contract-correction-deliverable-3-fix)
 - [ADR-017: Pre-Landing Review Fixes — Deliverables #1-#3](#adr-017-pre-landing-review-fixes--deliverables-1-3)
 - [ADR-018: Logging, Ground Truth & Replay Architecture (Deliverable #4)](#adr-018-logging-ground-truth--replay-architecture-deliverable-4)
+- [ADR-019: ThingSpeak Client & Quota Enforcement (Deliverable #5)](#adr-019-thingspeak-client--quota-enforcement-deliverable-5)
 
 ---
 
@@ -273,3 +274,25 @@ This document preserves the complete historical and technical rationale for all 
   * **Normalization contract for determinism verification:** `normalize_telemetry_csv()` strips `run_id`, rounds all floats to 6 decimal places, and sorts by `(sim_second, animal_id)`. `normalize_manifest()` strips `run_id`, `start_time_iso`, and `config_hash`. Two dry-runs with identical seed/config/scenario produce byte-identical normalized output — proven by integration test.
   * **Replay reader (`replay.py`):** `load_replay()` yields typed `ReplayRow` objects sorted by `(sim_second, animal_id)`. Pipe-separated event codes are parsed into `list[str]`. The reader is the foundation for the future `--mode replay` CLI command (deferred to when `main.py` is built).
 * **Consequences:** 246 tests pass (197 existing + 38 logger + 11 replay). The logging service is fully wired and functional via `create_run_logger()` + `wire_logger()` + `close_logger()` — these can be called from any entry point. `main.py` remains deferred (ADR-017). The replay reader is ready for the future replay mode but does not depend on it.
+
+---
+
+## ADR-019: ThingSpeak Client & Quota Enforcement (Deliverable #5)
+
+* **Status:** Approved
+* **Context:** Deliverables #1-4 built a complete simulation engine with logging but no actual HTTP communication with ThingSpeak. The scheduler decides which animal transmits and when, firing `sim.on_transmit(telemetry)`, but nothing consumed that callback to perform network I/O. The Master PRD requires Channel 2 POST writes, Channel 1 GET sniffing for Collar-1 GPS anchoring (ADR-010), quota enforcement against the 3M annual ceiling, exponential backoff on failures, and resilience ("ThingSpeak outage does not stop simulation").
+* **Decision:**
+  * **Background-threaded HTTP (`thingspeak.py`):** Two daemon threads — a writer thread draining a bounded `Queue(maxsize=100)` for Channel 2 POSTs, and a sniffer thread performing periodic Channel 1 GETs. The tick loop's `on_transmit` callback enqueues writes non-blockingly; the writer thread handles the actual HTTP, retries, and backoff. This ensures the 1-second tick loop never blocks on network I/O.
+  * **Stdlib-only HTTP:** Uses `urllib.request` (no `requests` or `httpx`), consistent with the project's zero-dependency principle. Thin `_http_post` and `_http_get` wrappers provide clean mockability for testing.
+  * **Fan-out callback composition:** `wire_thingspeak(sim, client)` must be called after `wire_logger()`. It captures the existing `on_transmit` (the logger's callback) via closure and wraps both into a single function — the logger records the transmission first, then the ThingSpeak client enqueues the HTTP write. No changes to the `Simulator` dataclass's single-slot `Optional[Callable]` type signatures were needed.
+  * **Quota enforcement:** `QuotaState` tracks annual and daily write counts in memory. `check_quota()` disables writes before the configurable `annual_write_limit` (default 3,000,000) is reached and warns at `quota_warning_pct` (default 90%). Daily counter resets after 86,400 seconds. Not persisted across runs — acceptable for P1 MVP.
+  * **Exponential backoff:** Failed POSTs retry up to 4 times with exponential delay (`base_s * 2^failures`, capped at `backoff_max_s`). Backoff sleeps use `Event.wait()` so they're interruptible on shutdown. ThingSpeak rate-limit responses (HTTP 200 with body `"0"`) are treated as retryable failures, matching ThingSpeak's documented behavior.
+  * **Mode gating:** `enqueue_write()` returns immediately (no HTTP, no queue) in DRY_RUN and OFFLINE modes. `start()` skips thread creation when mode is not LIVE or when required API keys are missing. DRY_RUN determinism is preserved — the ThingSpeak integration causes no side effects outside LIVE mode.
+  * **Collar-1 centroid anchoring (ADR-010 implementation):** The `Simulator` dataclass gains `collar1_anchor: Optional[Coord]` and `collar1_anchor_time: float`. The sniffer thread updates these via a thread-safe callback. `tick()` step 4 now conditionally uses `step_centroid_anchored()` when a fresh fix exists (within `channel_1_stale_threshold_s`), falling back to `step_centroid_autonomous()` otherwise. Only active in LIVE mode.
+  * **Config extensions:** `ThingSpeakConfig` gains `channel_1_id`, `annual_write_limit`, and `quota_warning_pct`. Validated at load time (annual limit > 0, warning % in 1–100). Defaults make existing configs forward-compatible.
+  * **Transmission result logging:** `log_write_result()` in `logger.py` writes HTTP outcome records (`success`, `rejected`, `retry_exhausted`, `dropped`, `quota_disabled`) to `transmissions.jsonl` with a `"type": "http_result"` discriminator, coexisting with the existing scheduler-level records.
+  * **Credential safety:** API keys loaded from environment variables via the existing `load_env_credentials()`. Never logged — log messages use `key={'set' if key else 'missing'}`. Missing write key in LIVE mode logs a warning and skips the writer thread; the simulation continues.
+* **Deferred (not addressed in this deliverable):**
+  * ID 1's tick-loop behavior remains unchanged (still simulated each tick). The sniffer provides centroid anchoring for the herd, which is the correct ADR-010 behavior, but revisiting ID 1's own simulation is deferred until the sniffing integration is proven in the field (as noted in ADR-017).
+  * `src/main.py` CLI entry point remains deferred (ADR-017).
+* **Consequences:** 308 tests pass (246 existing + 62 new ThingSpeak tests). The `step_centroid_anchored` import in `simulator.py` (previously flagged as an intentional placeholder in ADR-017) is now in active use. The ThingSpeak client is fully wired via `ThingSpeakClient(cfg, creds, mode)` + `client.start()` + `wire_thingspeak(sim, client)` — callable from any entry point.

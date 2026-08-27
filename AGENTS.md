@@ -179,7 +179,7 @@ IoT/
 │   │   ├── services/
 │   │   │   ├── logger.py           # Buffered per-run logging: 8 output files + ground truth
 │   │   │   ├── replay.py           # Telemetry CSV reader + normalization for determinism
-│   │   │   ├── thingspeak.py       # Ch.2 POST writer & Ch.1 GET sniffer (not yet built)
+│   │   │   ├── thingspeak.py       # Ch.2 POST writer, Ch.1 GET sniffer, quota & backoff
 │   │   │   └── api_server.py       # REST API & static HUD server (not yet built)
 │   │   └── web/                    # (not yet built)
 │   │       ├── index.html          # Leaflet.js live map & telemetry HUD
@@ -193,7 +193,8 @@ IoT/
     ├── test_scenario_engine.py     # Fault injection & overlap policy tests
     ├── test_scheduler.py           # 15s floor, starvation prevention, sweep checks
     ├── test_logger.py              # Per-run logging: buffered I/O, ground truth, determinism
-    └── test_replay.py              # Replay reader, normalization, end-to-end determinism
+    ├── test_replay.py              # Replay reader, normalization, end-to-end determinism
+    └── test_thingspeak.py          # ThingSpeak client, quota, backoff, sniffer, wiring
 ```
 
 ---

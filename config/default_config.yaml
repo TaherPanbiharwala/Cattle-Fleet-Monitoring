@@ -82,6 +82,7 @@ risk:
 # --- ThingSpeak (ADR-004) --------------------------------------------------
 thingspeak:
   channel_2_id: ""                   # Fill from env or leave empty for offline/dry-run
+  channel_1_id: ""                   # Channel 1 ID for Collar-1 sniffing (ADR-010)
   write_cadence_s: 30                # Seconds between Channel 2 POSTs (normal mode)
   breach_cadence_s: 15               # Seconds between POSTs during breach/alert burst
   min_interval_s: 15                 # Absolute floor — never POST faster than this (ADR-004)
@@ -89,6 +90,8 @@ thingspeak:
   channel_1_stale_threshold_s: 120   # If last Ch.1 data is older than this, fall back to drift
   backoff_base_s: 2                  # Exponential backoff base for failed POSTs
   backoff_max_s: 16                  # Maximum backoff delay
+  annual_write_limit: 3000000        # Free-tier ceiling — writes disabled before this (ADR-004)
+  quota_warning_pct: 90              # Log a warning when annual usage reaches this %
 
 # --- Logging (ADR-012, ADR-013) --------------------------------------------
 logging:

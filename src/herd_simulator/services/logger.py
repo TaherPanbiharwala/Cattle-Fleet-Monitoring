@@ -342,6 +342,29 @@ def log_transmission(rl: RunLogger, t: AnimalTelemetry) -> None:
     rl.total_transmissions += 1
 
 
+def log_write_result(
+    rl: RunLogger,
+    animal_id: int,
+    sim_second: int,
+    outcome: str,
+    status_code: Optional[int] = None,
+    attempts: int = 0,
+) -> None:
+    if rl.transmissions_writer is None:
+        return
+    record: dict = {
+        "type": "http_result",
+        "animal_id": animal_id,
+        "sim_second": sim_second,
+        "outcome": outcome,
+    }
+    if status_code is not None:
+        record["http_status"] = status_code
+    if attempts > 0:
+        record["attempts"] = attempts
+    _write_line(rl.transmissions_writer, json.dumps(record, separators=(",", ":")))
+
+
 # -----------------------------------------------------------------------
 # Ground truth
 # -----------------------------------------------------------------------
