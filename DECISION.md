@@ -32,6 +32,7 @@ This document preserves the complete historical and technical rationale for all 
 - [ADR-018: Logging, Ground Truth & Replay Architecture (Deliverable #4)](#adr-018-logging-ground-truth--replay-architecture-deliverable-4)
 - [ADR-019: ThingSpeak Client & Quota Enforcement (Deliverable #5)](#adr-019-thingspeak-client--quota-enforcement-deliverable-5)
 - [ADR-020: REST API Server & Web HUD (Deliverable #6)](#adr-020-rest-api-server--web-hud-deliverable-6)
+- [ADR-021: CLI Entry Point & MVP Finalization (Deliverable #7)](#adr-021-cli-entry-point--mvp-finalization-deliverable-7)
 
 ---
 
@@ -319,3 +320,32 @@ This document preserves the complete historical and technical rationale for all 
   * ID 1 behavior (physical collar parity) remains simulated — deferred per ADR-017.
   * `src/main.py` CLI entry point remains deferred (ADR-017).
 * **Consequences:** 370 tests pass (308 existing + 62 new API server tests across 14 test classes). The API server is fully wired via `create_hud_state(sim, run_id)` + `HudServer(hud_state, cfg).start()` + `wire_api_server(sim, hud_state)` — callable from any entry point. Tests use port 0 (OS-assigned) to eliminate CI conflicts.
+ 
+---
+
+## ADR-021: CLI Entry Point & MVP Finalization (Deliverable #7)
+
+* **Status:** Approved
+* **Context:** Deliverables #1-#6 implemented all core simulator subsystems (math utilities, animal state models, 1-second simulation engine, structured logging, ThingSpeak client, and REST API/HUD). However, `src/main.py` was deferred in ADR-017, canonical scenario files (`demo_scenario.json` and `fault_injection.json`) were missing, and end-to-end verification across all 16 MVP Acceptance Criteria was needed to finalize Phase 1.
+* **Decision:**
+  * **Unified CLI Entry Point (`src/main.py`):** Built with standard library `argparse`, supporting all 4 execution modes (`dry-run`, `offline`, `live`, `replay`) and full flags (`--config`, `--scenario`, `--duration-hours`, `--hud`, `--port`, `--seed`, `--log-dir`, `--playback-speed`, `--verbose`).
+  * **Strict Lifecycle & Boot Wiring Order:**
+    1. Parse args & configure logging.
+    2. Auto-load `.env` variables via stdlib `env_loader.py` without third-party dependencies.
+    3. Load & validate YAML configuration with CLI overrides applied via `dataclasses.replace`.
+    4. Load & validate scenario JSON against herd ID bounds (`1..n_total`).
+    5. Initialize deterministic animal profiles and `Simulator` instance.
+    6. Initialize and wire `RunLogger` (manifest, snapshot, profiles, telemetry, events, transmissions, ground truth).
+    7. Initialize `ThingSpeakClient` (gated to `LIVE` mode) and wire transmission & result callbacks.
+    8. Initialize `HudServer` and wire `on_tick_complete` state updates (if `--hud` enabled).
+    9. Spawn interactive CLI daemon thread if in interactive terminal (`sys.stdin.isatty()`).
+    10. Register `SIGINT` and `SIGTERM` signal handlers for graceful shutdown.
+    11. Execute `run_simulation(sim, duration_seconds)`.
+    12. Execute `finally` cleanup: write `summary.json`, flush/close buffered writers, stop ThingSpeak and HUD threads.
+  * **Interactive HUD Replay (`run_replay`):** Replay mode parses prior `telemetry.csv` files via `load_replay()`, groups rows by `sim_second`, and streams them into `HudState` under thread lock with configurable playback speed, allowing visual re-examination of past runs in the Leaflet HUD without re-running simulation physics.
+  * **Canonical Scenario Suite:**
+    - `config/scenarios/demo_scenario.json`: 20-minute classroom walkthrough demonstrating all 5 visible anomaly faults (`fever_onset`, `geofence_breach`, `social_isolation`, `tamper`, `heat_stress`, `collar_dropout`) with spaced activation and overlap composition.
+    - `config/scenarios/fault_injection.json`: Full 10-event test matrix covering all 6 fault types, sequential re-activation, boundary edge cattle IDs (2 and 20), and multi-sweep execution.
+  * **Comprehensive E2E Acceptance Verification (`test_e2e_acceptance.py`):** 16 automated test cases explicitly mapped 1:1 against the Master PRD's MVP Acceptance Criteria (AC-1 through AC-16), proving byte-identical dry-run determinism, sweep coverage, 15s floor enforcement, quota safety, fault composition, and zero credential leakage.
+* **Consequences:** Phase 1 (MVP) is 100% complete and fully verified. 402 tests pass across 12 test suites.
+

@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "scenario_id": "demo_scenario",
+  "seed": 42,
+  "events": [
+    {
+      "animal_id": 5,
+      "type": "fever_onset",
+      "start_sim_second": 60,
+      "duration_seconds": 300,
+      "event_id": "demo-fever-5",
+      "params": {
+        "peak_offset_c": 1.8,
+        "onset_s": 60,
+        "plateau_s": 180,
+        "recovery_s": 60
+      }
+    },
+    {
+      "animal_id": 12,
+      "type": "geofence_breach",
+      "start_sim_second": 180,
+      "duration_seconds": 240,
+      "event_id": "demo-breach-12",
+      "params": {
+        "outward_m": 25.0
+      }
+    },
+    {
+      "animal_id": 8,
+      "type": "social_isolation",
+      "start_sim_second": 360,
+      "duration_seconds": 300,
+      "event_id": "demo-isol-8",
+      "params": {
+        "drift_rate_m_per_s": 0.2,
+        "max_extra_m": 100.0
+      }
+    },
+    {
+      "animal_id": 3,
+      "type": "tamper",
+      "start_sim_second": 540,
+      "duration_seconds": 180,
+      "event_id": "demo-tamper-3",
+      "params": {}
+    },
+    {
+      "animal_id": 15,
+      "type": "heat_stress",
+      "start_sim_second": 720,
+      "duration_seconds": 180,
+      "event_id": "demo-heat-15",
+      "params": {
+        "ambient_boost_c": 8.0
+      }
+    },
+    {
+      "animal_id": 10,
+      "type": "collar_dropout",
+      "start_sim_second": 900,
+      "duration_seconds": 300,
+      "event_id": "demo-dropout-10",
+      "params": {}
+    }
+  ]
+}

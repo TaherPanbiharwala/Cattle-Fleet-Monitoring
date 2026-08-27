@@ -181,12 +181,13 @@ IoT/
 │   │   │   ├── replay.py           # Telemetry CSV reader + normalization for determinism
 │   │   │   ├── thingspeak.py       # Ch.2 POST writer, Ch.1 GET sniffer, quota & backoff
 │   │   │   └── api_server.py       # REST API server + static HUD file serving + callback wiring
+│   │   ├── env_loader.py           # Stdlib .env file parser
 │   │   └── web/
 │   │       ├── index.html          # Leaflet.js live map & telemetry HUD (dark theme)
 │   │       ├── app.js              # Client-side polling, map markers, event injection
 │   │       ├── style.css           # Dashboard layout & colour variables
 │   │       └── leaflet/            # Leaflet 1.9.4 vendor bundle (JS, CSS, marker images)
-│   └── main.py                     # CLI entry point (not yet built — see ADR-017)
+│   └── main.py                     # CLI entry point (dry-run, offline, live, replay)
 └── tests/
     ├── test_golden_vectors.py      # Golden vector parity tests (THI, Risk, Geo)
     ├── test_config.py              # YAML validation guard tests (severity relationship checks)
@@ -196,7 +197,9 @@ IoT/
     ├── test_logger.py              # Per-run logging: buffered I/O, ground truth, determinism
     ├── test_replay.py              # Replay reader, normalization, end-to-end determinism
     ├── test_thingspeak.py          # ThingSpeak client, quota, backoff, sniffer, wiring
-    └── test_api_server.py          # REST API endpoints, HUD state, wiring, static serving
+    ├── test_api_server.py          # REST API endpoints, HUD state, wiring, static serving
+    ├── test_main.py                # CLI argument parsing, mode validation, flag overrides
+    └── test_e2e_acceptance.py      # Full 16 MVP Acceptance Criteria verification suite
 ```
 
 ---

@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "scenario_id": "fault_injection_matrix",
+  "seed": 42,
+  "events": [
+    {
+      "animal_id": 2,
+      "type": "tamper",
+      "start_sim_second": 0,
+      "duration_seconds": 120,
+      "event_id": "matrix-tamper-2-first",
+      "params": {}
+    },
+    {
+      "animal_id": 4,
+      "type": "heat_stress",
+      "start_sim_second": 60,
+      "duration_seconds": 300,
+      "event_id": "matrix-heat-4",
+      "params": {
+        "ambient_boost_c": 10.0
+      }
+    },
+    {
+      "animal_id": 7,
+      "type": "fever_onset",
+      "start_sim_second": 120,
+      "duration_seconds": 400,
+      "event_id": "matrix-fever-7",
+      "params": {
+        "peak_offset_c": 2.0,
+        "onset_s": 100,
+        "plateau_s": 200,
+        "recovery_s": 100
+      }
+    },
+    {
+      "animal_id": 7,
+      "type": "social_isolation",
+      "start_sim_second": 200,
+      "duration_seconds": 300,
+      "event_id": "matrix-isol-7-overlap",
+      "params": {
+        "drift_rate_m_per_s": 0.25,
+        "max_extra_m": 150.0
+      }
+    },
+    {
+      "animal_id": 14,
+      "type": "geofence_breach",
+      "start_sim_second": 300,
+      "duration_seconds": 300,
+      "event_id": "matrix-breach-14",
+      "params": {
+        "outward_m": 30.0
+      }
+    },
+    {
+      "animal_id": 14,
+      "type": "tamper",
+      "start_sim_second": 350,
+      "duration_seconds": 150,
+      "event_id": "matrix-tamper-14-overlap",
+      "params": {}
+    },
+    {
+      "animal_id": 2,
+      "type": "fever_onset",
+      "start_sim_second": 500,
+      "duration_seconds": 250,
+      "event_id": "matrix-fever-2-seq",
+      "params": {
+        "peak_offset_c": 1.5
+      }
+    },
+    {
+      "animal_id": 9,
+      "type": "social_isolation",
+      "start_sim_second": 600,
+      "duration_seconds": 400,
+      "event_id": "matrix-isol-9",
+      "params": {
+        "drift_rate_m_per_s": 0.2,
+        "max_extra_m": 100.0
+      }
+    },
+    {
+      "animal_id": 18,
+      "type": "collar_dropout",
+      "start_sim_second": 800,
+      "duration_seconds": 400,
+      "event_id": "matrix-dropout-18",
+      "params": {}
+    },
+    {
+      "animal_id": 20,
+      "type": "geofence_breach",
+      "start_sim_second": 900,
+      "duration_seconds": 300,
+      "event_id": "matrix-breach-20-edge",
+      "params": {
+        "outward_m": 25.0
+      }
+    }
+  ]
+}
