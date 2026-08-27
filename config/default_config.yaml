@@ -81,8 +81,8 @@ risk:
 
 # --- ThingSpeak (ADR-004) --------------------------------------------------
 thingspeak:
-  channel_2_id: ""                   # Fill from env or leave empty for offline/dry-run
-  channel_1_id: ""                   # Channel 1 ID for Collar-1 sniffing (ADR-010)
+  channel_2_id: "3472620"                   # Fill from env or leave empty for offline/dry-run
+  channel_1_id: "3472619"                   # Channel 1 ID for Collar-1 sniffing (ADR-010)
   write_cadence_s: 30                # Seconds between Channel 2 POSTs (normal mode)
   breach_cadence_s: 15               # Seconds between POSTs during breach/alert burst
   min_interval_s: 15                 # Absolute floor — never POST faster than this (ADR-004)
