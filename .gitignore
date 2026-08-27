@@ -36,6 +36,9 @@ htmlcov/
 .env
 *.local.env
 
+# PlatformIO build products (may contain local compile-time credentials)
+.pio/
+
 # Logs & Simulation Output
 logs/
 *.log

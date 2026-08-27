@@ -583,11 +583,11 @@ class TestSnifferThread:
         assert client.get_collar1_fix() is None
 
     @patch("herd_simulator.services.thingspeak._http_get")
-    def test_complete_channel1_record_is_forwarded_to_simulator(self, mock_get):
+    def test_sensor_sourced_channel1_record_with_manual_battery_is_forwarded_to_simulator(self, mock_get):
         mock_get.return_value = (200, json.dumps({
             "field1": "39.2", "field2": "73.5", "field3": "3",
             "field4": "12.9716", "field5": "79.1589", "field6": "55",
-            "field7": "1", "field8": "82", "status": "id=01;evt=FEVER",
+            "field7": "1", "field8": "67", "status": "id=01;evt=FEVER;src=SENSOR",
             "created_at": "2026-08-27T10:00:00Z",
         }).encode())
         cfg = load_config("config/default_config.yaml")
@@ -607,6 +607,7 @@ class TestSnifferThread:
         assert physical.stale is False
         assert physical.body_temp_c == 39.2
         assert physical.risk_score == 55
+        assert physical.battery_pct == 67
         assert physical.event_codes == ["FEVER"]
 
 

@@ -34,8 +34,8 @@ The platform is designed around the reality that only **one physical collar (ESP
                            ▼
 ┌────────────────────────────────────────────────────────┐
 │  Phase 2: Physical Collar Parity & Wi-Fi Gateway       │
-│  • ESP32 Firmware matching P1 Telemetry Contract       │
-│  • 10 Hz Wi-Fi IMU Acquisition & Packet Gap Logging    │
+│  • Deliverable 8: ESP32 firmware parity (implemented)  │
+│  • Deliverable 9: 10 Hz Wi-Fi IMU gateway + gaps       │
 └──────────────────────────┬─────────────────────────────┘
                            ▼
 ┌────────────────────────────────────────────────────────┐
@@ -69,6 +69,7 @@ The platform is designed around the reality that only **one physical collar (ESP
    - The writer enforces this as an absolute wall-clock gate before every POST attempt, including retries and queued backlog.
 3. **No Solar Recharge:**
    Collar hardware has no solar panels. Battery level (0–100%) must only deplete based on activity drain ($1\times$ base, $3\times$ during breach/alert bursts). When battery hits 0%, collar triggers dropout. Dropout telemetry must report as **stale and critical** (`risk_score=100`, red band) — never a fabricated healthy score just because no fresh data exists (see ADR-017; this was violated once already and fixed).
+   **Deliverable 8 exception:** the USB-powered physical prototype has no battery ADC. Its required `field8` is a laptop-controlled demonstration value set with the serial `battery <0..100>` command; it is never presented as a measured voltage. `battery 0` is a logical dropout that discards queued writes and suppresses Channel 1 transmission until a non-zero value is set. This exception does not alter the P1 simulator's activity-aware depletion model.
    Reserved physical identity **ID 1 is never simulated**. Until a complete, fresh Channel 1 row arrives, expose it locally as stale and critical (`risk_score=100`, red/grey presentation). A GPS-only Channel 1 fix may anchor herd movement, but does not make ID 1 telemetry fresh; once a complete row arrives, use its actual values.
 4. **Strict Mathematical Determinism:**
    Given the same configuration, scenario, and random seed (default `42`), the simulation must produce byte-identical normalized telemetry across runs.
@@ -98,7 +99,7 @@ The platform is designed around the reality that only **one physical collar (ESP
 | `field5` | GPS Longitude | float | Decimal degrees (e.g. `79.1589`) |
 | `field6` | Composite Risk Score | int | `0` to `100` |
 | `field7` | Geofence Status | int | `0` Inside, `1` 10m Warning Zone, `2` Breach |
-| `field8` | Battery Level | int | `0` to `100` (%) |
+| `field8` | Battery Level | int | `0` to `100` (%); Deliverable 8 USB demo uses an explicit manual value, not an ADC measurement |
 | `status` | Identity & Events | text | Semicolon-delimited: `id=XX;evt=YY;src=ZZ` (e.g. `id=07;evt=FEVER;src=RULE`) |
 
 ### 4.2 Mathematical Formulas
@@ -157,6 +158,10 @@ IoT/
 ├── Cattle_Fleet_Management_Master_PRD.md
 ├── Cattle_Fleet_Management_HerdSimulator_PRD.md
 ├── pyproject.toml                  # Python build & dependency spec
+├── requirements.txt                 # Runtime, test, and PlatformIO dependencies
+├── requirement.txt                  # Compatibility alias for requirements.txt
+├── contracts/
+│   └── telemetry_parity_v1.json     # Shared Python/ESP32 math & field contract
 ├── config/
 │   ├── default_config.yaml         # Validated v1 YAML configuration
 │   └── scenarios/
@@ -191,7 +196,15 @@ IoT/
 │   │       ├── app.js              # Client-side polling, map markers, event injection
 │   │       ├── style.css           # Dashboard layout & colour variables
 │   │       └── leaflet/            # Leaflet 1.9.4 vendor bundle (JS, CSS, marker images)
-│   └── main.py                     # CLI entry point (dry-run, offline, live, replay)
+│   ├── main.py                     # CLI entry point (dry-run, offline, live, replay)
+│   └── collar_gateway/
+│       ├── README.md                # Deliverable 8 build, HUD, and battery-demo guide
+│       ├── ESP32_WIRING_GUIDE.md    # Pin-by-pin ESP32 component wiring reference
+│       └── firmware/                # PlatformIO Arduino Collar-1 project
+│           ├── platformio.ini       # esp32dev + native parity-test targets
+│           ├── include/device_config.h
+│           ├── src/main.cpp         # Sensors, scoring, Channel 1 writer, serial controls
+│           └── test/test_parity/    # Generated-contract C++ parity tests
 └── tests/
     ├── test_golden_vectors.py      # Golden vector parity tests (THI, Risk, Geo)
     ├── test_config.py              # YAML validation guard tests (severity relationship checks)
@@ -203,7 +216,8 @@ IoT/
     ├── test_thingspeak.py          # ThingSpeak client, quota, backoff, sniffer, wiring
     ├── test_api_server.py          # REST API endpoints, HUD state, wiring, static serving
     ├── test_main.py                # CLI argument parsing, mode validation, flag overrides
-    └── test_e2e_acceptance.py      # Full 16 MVP Acceptance Criteria verification suite
+    ├── test_e2e_acceptance.py      # Full 16 MVP Acceptance Criteria verification suite
+    └── test_parity_contract.py     # Python validation of the shared ESP32 parity contract
 ```
 
 ---

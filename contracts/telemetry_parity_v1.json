@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "telemetry": {
+    "physical_collar_id": 1,
+    "field_order": [
+      "field1",
+      "field2",
+      "field3",
+      "field4",
+      "field5",
+      "field6",
+      "field7",
+      "field8",
+      "status"
+    ],
+    "status_source": "SENSOR"
+  },
+  "geofence": {
+    "earth_radius_m": 6371000.0,
+    "warning_band_m": 10.0,
+    "polygon": [
+      [12.972, 79.1585],
+      [12.972, 79.1605],
+      [12.9705, 79.1605],
+      [12.9705, 79.1585]
+    ],
+    "vectors": [
+      {"latitude": 12.97125, "longitude": 79.1595, "expected_status": 0},
+      {"latitude": 12.9719551, "longitude": 79.1595, "expected_status": 1},
+      {"latitude": 12.973, "longitude": 79.1595, "expected_status": 2}
+    ]
+  },
+  "risk": {
+    "baseline_temp_c": 38.6,
+    "temp_offset_low": 0.5,
+    "temp_offset_high": 2.0,
+    "thi_low": 68.0,
+    "thi_high": 84.0,
+    "restless": 0.35,
+    "geo_warn": 0.5,
+    "geo_breach": 0.9,
+    "social_isolation": 0.7,
+    "collar_tamper": 0.9,
+    "green_max": 39,
+    "yellow_max": 69,
+    "vectors": [
+      {"body_temp_c": 38.6, "thi": 65.0, "restless": false, "geofence_status": 0, "isolated": false, "tampered": false, "expected_score": 0},
+      {"body_temp_c": 38.6, "thi": 65.0, "restless": false, "geofence_status": 2, "isolated": false, "tampered": false, "expected_score": 90},
+      {"body_temp_c": 39.6, "thi": 65.0, "restless": false, "geofence_status": 0, "isolated": false, "tampered": false, "expected_score": 33},
+      {"body_temp_c": 38.6, "thi": 76.0, "restless": false, "geofence_status": 0, "isolated": false, "tampered": false, "expected_score": 50},
+      {"body_temp_c": 38.6, "thi": 65.0, "restless": false, "geofence_status": 1, "isolated": false, "tampered": false, "expected_score": 50},
+      {"body_temp_c": 38.6, "thi": 65.0, "restless": false, "geofence_status": 2, "isolated": false, "tampered": true, "expected_score": 99}
+    ]
+  },
+  "thi_vectors": [
+    {"ambient_temp_c": 30.0, "humidity_pct": 60.0, "expected_thi": 79.84},
+    {"ambient_temp_c": 40.0, "humidity_pct": 80.0, "expected_thi": 98.94},
+    {"ambient_temp_c": 15.0, "humidity_pct": 30.0, "expected_thi": 58.615},
+    {"ambient_temp_c": 25.0, "humidity_pct": 0.0, "expected_thi": 66.55}
+  ]
+}

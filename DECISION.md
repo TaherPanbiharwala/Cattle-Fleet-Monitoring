@@ -33,6 +33,8 @@ This document preserves the complete historical and technical rationale for all 
 - [ADR-019: ThingSpeak Client & Quota Enforcement (Deliverable #5)](#adr-019-thingspeak-client--quota-enforcement-deliverable-5)
 - [ADR-020: REST API Server & Web HUD (Deliverable #6)](#adr-020-rest-api-server--web-hud-deliverable-6)
 - [ADR-021: CLI Entry Point & MVP Finalization (Deliverable #7)](#adr-021-cli-entry-point--mvp-finalization-deliverable-7)
+- [ADR-022: Post-Ship Live Boundary Hardening (Deliverables #4–#7 Follow-up)](#adr-022-post-ship-live-boundary-hardening-deliverables-4-7-follow-up)
+- [ADR-023: Physical Collar Parity Firmware (Deliverable #8)](#adr-023-physical-collar-parity-firmware-deliverable-8)
 
 ---
 
@@ -71,7 +73,7 @@ This document preserves the complete historical and technical rationale for all 
   * **Ambient Environment:** DHT11 temperature and relative humidity sensor
   * **Movement / IMU:** MPU6050 6-axis accelerometer + gyroscope (I2C)
   * **Location:** NEO-6M GPS module (UART)
-  * **Battery Voltage:** ADC input on GPIO34 with voltage divider
+  * **Battery Demo (Deliverable #8):** No ADC is fitted to the USB-powered classroom prototype. `field8` is a laptop-controlled manual percentage; GPIO34 is unused (superseded by ADR-023).
 * **Consequences:** The simulator must synthesize telemetry that exactly mimics the physical ranges and properties of these specific sensors.
 
 ---
@@ -364,3 +366,20 @@ This document preserves the complete historical and technical rationale for all 
   * **Dropout scheduling:** A dropout candidate is skipped before consuming a scheduler slot; the skip is recorded in `transmissions.jsonl` as a `type: "skipped"` record and does not increment transmission totals. The ThingSpeak enqueue boundary also defensively refuses dropout telemetry.
   * **Live event semantics and wiring:** REST-injected events reject `duration_seconds` with `DURATION_NOT_ALLOWED` and remain active until DELETE/clear. The main callback wiring uses the correct event argument order, replay loads the saved configuration snapshot, and the HUD renders stale physical data grey.
 * **Consequences:** The live integration now preserves physical-vs-simulated identity, deterministic state access, rate-limit compliance, and lossless shutdown logging across Deliverables #4–#7. The complete suite passes with **411 tests** after this hardening, including regression coverage for each boundary above. Commit `6095f04` contains the implementation.
+
+---
+
+## ADR-023: Physical Collar Parity Firmware (Deliverable #8)
+
+* **Status:** Implemented / Approved
+* **Date:** 2026-08-27
+* **Supersedes:** ADR-003's GPIO34 battery-ADC requirement for the USB-powered classroom prototype only.
+* **Context:** Phase 1 has a hardened Channel 1 sniffer and HUD boundary, but no physical publisher. The project needs one ESP32 Collar-1 prototype that emits the same immutable eight fields and `status` contract without adding a battery voltage divider or creating a dependency from P1 onto the firmware.
+* **Decision:**
+  * **Platform and hardware:** Deliverable 8 is a PlatformIO/Arduino project targeting `esp32dev` (ESP32 DevKit V1 / WROOM-32). It integrates MLX90614 on I²C (`SDA=GPIO21`, `SCL=GPIO22`), DHT11 (`DATA=GPIO4`), MPU6050 on the shared I²C bus, and NEO-6M GPS (`TX→GPIO16`, optional `RX←GPIO17`). The pin map is public configuration in `src/collar_gateway/firmware/include/device_config.h` and is documented in `src/collar_gateway/ESP32_WIRING_GUIDE.md`.
+  * **Telemetry completeness:** MLX90614 body temperature, DHT11 ambient temperature/humidity, and a fresh GPS fix are required before a complete Channel 1 row is posted. The MPU6050 is sampled locally at 10 Hz in a five-second window; the temporary classifier emits only Resting (`0`), Walking (`3`), or Other/Unknown (`5`). It must never map uncertain motion to Restless (`4`).
+  * **Parity and status:** The firmware computes THI, geofence status, alert band, and product-rule predicted risk from `contracts/telemetry_parity_v1.json`, which is also checked from Python and generated into the firmware build. It posts `id=01;...;src=SENSOR`; measured temperature/THI/breach conditions can add the machine event codes `FEVER`, `HEAT`, and `BREACH`. Narrative UI output remains “Predicted Risk Score,” never a diagnosis.
+  * **Battery exception:** No ADC or GPIO34 wiring is used. `field8` starts at `100` and is set manually from the laptop over USB serial with `battery <0..100>`. It is demonstration metadata, not a voltage reading. `battery 0` creates a logical dropout (`risk_score=100`, `evt=DROPOUT` in local status), clears pending writes, and suppresses Channel 1 transmission until restored to a non-zero value.
+  * **Transport and secrets:** Channel 1 posts at 30 seconds normally and 15 seconds when critical/breached; the background worker applies the 15-second wall-clock floor before every retry and keeps only the latest valid telemetry. `WIFI_SSID`, `WIFI_PASSWORD`, and `THINGSPEAK_CHANNEL_1_WRITE_API_KEY` are loaded from an untracked root `.env` or explicit build environment variables and never logged. `requirements.txt` supplies PyYAML, pytest, and PlatformIO for a reproducible laptop setup.
+* **Deferred:** Deliverable 9 remains responsible for raw 10 Hz IMU streaming to the laptop, packet-gap logging, and any trained behaviour model. The classroom firmware currently accepts the ESP32 TLS certificate chain without pinning; pin a current ThingSpeak CA certificate before any production deployment.
+* **Consequences:** A physical Collar 1 can now replace the simulator's stale placeholder once a complete Channel 1 row is received, while P1 remains runnable independently. The firmware compiles for `esp32dev`, native C++ parity tests cover THI/risk/geofence/alert vectors, and the Python Channel 1 regression suite accepts `src=SENSOR` rows with the manual `field8` value.
