@@ -1,0 +1,108 @@
+# =============================================================================
+# Herd Simulator — Default Configuration (v1)
+# =============================================================================
+# This is the single source of truth for all runtime parameters.
+# Inline comments document every field for developer onboarding.
+# =============================================================================
+
+# --- Herd Identity --------------------------------------------------------
+herd:
+  n_sim: 19                          # Number of simulated cattle (IDs 2..n_sim+1)
+  n_total: 20                        # Total herd size (1 physical + n_sim virtual)
+  physical_collar_id: 1              # ID reserved for the real ESP32 collar
+
+# --- Random Seed (determinism guarantee, ADR P-4) -------------------------
+seed: 42                             # Global seed — per-animal seeds derived as seed + animal_id
+
+# --- Pasture Geofence Polygon (ADR-008) -----------------------------------
+# Simple closed polygon in decimal degrees (≥3 vertices).
+# Default: ~200m × 150m rectangle near VIT Vellore campus.
+# Ray-casting point-in-polygon + 10m inner warning band.
+pasture_polygon:
+  - [12.9720, 79.1585]
+  - [12.9720, 79.1605]
+  - [12.9705, 79.1605]
+  - [12.9705, 79.1585]
+
+# --- Physiology (ADR-007) -------------------------------------------------
+physiology:
+  baseline_temp_mean: 38.6           # Mean baseline body temp (°C) across the herd
+  baseline_temp_std: 0.3             # Std dev for per-animal baseline offset (drawn at startup)
+  diurnal_amplitude: 0.4             # Peak-to-trough body temp swing (°C) over 24h
+  noise_std: 0.05                    # Gaussian noise on body temp each tick
+
+# --- Weather (synthesized diurnal model, FR-12 default) --------------------
+weather:
+  ambient_temp_day: 32.0             # Peak ambient temperature (°C) at ~14:00
+  ambient_temp_night: 24.0           # Trough ambient temperature (°C) at ~04:00
+  humidity_mean: 65.0                # Mean relative humidity (%)
+  humidity_std: 5.0                  # Humidity noise std dev
+
+# --- Battery (ADR-009 — no solar recharge) ---------------------------------
+battery:
+  initial_level: 100.0               # Starting battery % (always 100 for a fresh run)
+  base_drain_per_hour: 0.5           # % per hour at 1× drain (resting/grazing, 30s cadence)
+  alert_drain_multiplier: 3.0        # Drain multiplier during breach/alert/15s bursts
+
+# --- Movement (§6.3, ADR-010) ---------------------------------------------
+movement:
+  centroid_speed_m_per_s: 0.02       # Herd centroid drift speed (m/s) — slow random walk
+  individual_offset_max_m: 30.0      # Max distance from centroid per animal (meters)
+  flocking_strength: 0.3             # 0.0 = independent, 1.0 = glued to centroid
+
+# --- Behaviour State Machine (§9.1, ADR-006) -------------------------------
+# Transition weights are time-of-day modulated at runtime (FR-5).
+# These are the base (midday) probabilities per tick.
+behaviour:
+  transition_interval_s: 60          # Seconds between state-transition evaluations
+  base_transitions:                  # From → To probabilities (must sum ≤ 1.0 per row)
+    resting:    { grazing: 0.15, restless: 0.02 }
+    grazing:    { ruminating: 0.10, walking: 0.08 }
+    ruminating: { resting: 0.12 }
+    walking:    { grazing: 0.15 }
+    restless:   { resting: 0.25 }
+
+# --- Risk Score Thresholds (ADR-007) ---------------------------------------
+risk:
+  severity:
+    temp_offset_low: 0.5             # Body temp offset (°C above baseline) where S_temp starts
+    temp_offset_high: 2.0            # Body temp offset where S_temp = 1.0
+    thi_low: 68                      # THI threshold where S_THI starts
+    thi_high: 84                     # THI threshold where S_THI = 1.0
+    restless: 0.35                   # Fixed severity for behaviour=Restless
+    geo_warn: 0.50                   # Fixed severity for geofence warning band
+    geo_breach: 0.90                 # Fixed severity for geofence breach
+    social_isolation: 0.70           # Fixed severity for social isolation
+    collar_tamper: 0.90              # Fixed severity for collar tamper
+  alert_bands:                       # risk score → alert level
+    green_max: 39                    # 0–39 = Green (Normal)
+    yellow_max: 69                   # 40–69 = Yellow (Warning)
+    # 70–100 = Red (Critical Alert)
+
+# --- ThingSpeak (ADR-004) --------------------------------------------------
+thingspeak:
+  channel_2_id: "3472620"                   # Fill from env or leave empty for offline/dry-run
+  channel_1_id: "3472619"                   # Channel 1 ID for Collar-1 sniffing (ADR-010)
+  write_cadence_s: 30                # Seconds between Channel 2 POSTs (normal mode)
+  breach_cadence_s: 15               # Seconds between POSTs during breach/alert burst
+  min_interval_s: 15                 # Absolute floor — never POST faster than this (ADR-004)
+  channel_1_sniff_interval_s: 60     # How often to GET Channel 1 for Collar-1 GPS
+  channel_1_stale_threshold_s: 120   # If last Ch.1 data is older than this, fall back to drift
+  backoff_base_s: 2                  # Exponential backoff base for failed POSTs
+  backoff_max_s: 16                  # Maximum backoff delay
+  annual_write_limit: 3000000        # Free-tier ceiling — writes disabled before this (ADR-004)
+  quota_warning_pct: 90              # Log a warning when annual usage reaches this %
+
+# --- Logging (ADR-012, ADR-013) --------------------------------------------
+logging:
+  log_dir: "logs"                    # Base directory for run logs
+  ground_truth_enabled: true         # Write 190-pair ground truth CSV each tick
+  telemetry_csv_enabled: true        # Write per-tick telemetry CSV
+  events_jsonl_enabled: true         # Write event log as JSONL
+  buffer_size: 100                   # Buffered writer flush interval (lines)
+
+# --- HUD Server (ADR-011) -------------------------------------------------
+hud:
+  host: "127.0.0.1"
+  port: 8000
+  poll_interval_ms: 2000             # Client-side polling interval (ms)

@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cattle Fleet HUD</title>
+  <link rel="stylesheet" href="leaflet/leaflet.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header id="topbar">
+    <h1>Cattle Fleet Management HUD</h1>
+    <div id="connection-status" class="status-dot connected" title="Connected"></div>
+    <div id="sim-info">
+      <span id="sim-mode">--</span>
+      <span id="sim-second">t=0</span>
+      <span id="uptime">up 0s</span>
+    </div>
+  </header>
+
+  <main id="layout">
+    <section id="map-container">
+      <div id="map"></div>
+    </section>
+
+    <aside id="sidebar">
+      <!-- Environment -->
+      <div class="panel" id="env-panel">
+        <h2>Environment</h2>
+        <div class="kv-grid">
+          <span class="label">Ambient</span><span id="env-temp" class="val">--</span>
+          <span class="label">Humidity</span><span id="env-hum" class="val">--</span>
+          <span class="label">THI</span><span id="env-thi" class="val">--</span>
+        </div>
+      </div>
+
+      <!-- Active Events -->
+      <div class="panel" id="events-panel">
+        <h2>Active Events</h2>
+        <div id="events-list" class="scroll-box"><em>None</em></div>
+      </div>
+
+      <!-- Inject Event -->
+      <div class="panel" id="inject-panel">
+        <h2>Inject Event</h2>
+        <div class="inject-row">
+          <select id="inject-type">
+            <option value="fever_onset">Fever</option>
+            <option value="heat_stress">Heat Stress</option>
+            <option value="geofence_breach">Breach</option>
+            <option value="tamper">Tamper</option>
+            <option value="social_isolation">Isolation</option>
+            <option value="collar_dropout">Dropout</option>
+          </select>
+          <input id="inject-id" type="number" min="1" max="20" value="5" title="Animal ID">
+          <button id="inject-btn" onclick="injectEvent()">Inject</button>
+        </div>
+      </div>
+
+      <!-- Queue -->
+      <div class="panel" id="queue-panel">
+        <h2>Transmission Queue</h2>
+        <div class="kv-grid">
+          <span class="label">Priority</span><span id="q-priority" class="val">--</span>
+          <span class="label">Next RR</span><span id="q-rr" class="val">--</span>
+          <span class="label">Writes</span><span id="q-writes" class="val">0</span>
+          <span class="label">Sweeps</span><span id="q-sweeps" class="val">0</span>
+        </div>
+      </div>
+
+      <!-- Animal Table -->
+      <div class="panel" id="table-panel">
+        <h2>Herd Status</h2>
+        <div class="table-scroll">
+          <table id="animal-table">
+            <thead>
+              <tr>
+                <th>ID</th><th>Temp</th><th>THI</th><th>Behaviour</th>
+                <th>Risk</th><th>Geo</th><th>Batt</th><th>Events</th>
+              </tr>
+            </thead>
+            <tbody id="animal-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <script src="leaflet/leaflet.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

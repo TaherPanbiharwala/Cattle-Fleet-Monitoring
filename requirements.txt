@@ -1,0 +1,8 @@
+# Phase 1 simulator runtime
+PyYAML>=6.0
+
+# Automated verification
+pytest>=8.0
+
+# Phase 2 ESP32 DevKit V1 / WROOM-32 firmware build and upload tooling
+platformio>=6.1,<7
