@@ -349,3 +349,18 @@ This document preserves the complete historical and technical rationale for all 
   * **Comprehensive E2E Acceptance Verification (`test_e2e_acceptance.py`):** 16 automated test cases explicitly mapped 1:1 against the Master PRD's MVP Acceptance Criteria (AC-1 through AC-16), proving byte-identical dry-run determinism, sweep coverage, 15s floor enforcement, quota safety, fault composition, and zero credential leakage.
 * **Consequences:** Phase 1 (MVP) is 100% complete and fully verified. 402 tests pass across 12 test suites.
 
+---
+
+## ADR-022: Post-Ship Live Boundary Hardening (Deliverables #4–#7 Follow-up)
+
+* **Status:** Approved
+* **Date:** 2026-08-27
+* **Supersedes:** The deferred ID 1 behavior in ADR-017, ADR-019, and ADR-020; the GIL-only state-safety assumption in ADR-020; and the cleanup ordering described in ADR-021.
+* **Context:** The Deliverables #4–#7 review found several integration-boundary defects despite the MVP subsystems being individually complete: the physical collar identity could still receive synthetic simulation, REST and sniffer threads could race the tick loop, POST retries could bypass the ThingSpeak rate floor, shutdown could close loggers before background writers finished, and live API events could accidentally use scripted-event expiry semantics.
+* **Decision:**
+  * **Physical Collar-1 boundary:** ID 1 uses a dedicated physical-collar tick path. It never receives synthetic physiology, behavior, movement, battery, or risk updates. Before a complete fresh Channel 1 row arrives, local state exposes an explicit stale/critical placeholder; a GPS-only fix is used only for herd anchoring. A complete fresh row supplies ID 1's actual telemetry and clears the stale state. The local `stale` flag is presentation metadata and is not added to the immutable ThingSpeak eight-field contract.
+  * **Shared-state synchronization:** `Simulator.state_lock` protects the simulation tick, REST reads and event mutations, and Channel 1 callback updates. HUD history/latest snapshots retain a separate HUD lock, with callbacks arranged to avoid reverse lock acquisition.
+  * **Transport pacing and shutdown:** The ThingSpeak writer applies a global wall-clock gate of at least 15 seconds before every POST attempt, including retries. Shutdown signals workers first, joins the writer/sniffer threads, drains pending work, and only then closes the logger so final HTTP outcomes are recorded.
+  * **Dropout scheduling:** A dropout candidate is skipped before consuming a scheduler slot; the skip is recorded in `transmissions.jsonl` as a `type: "skipped"` record and does not increment transmission totals. The ThingSpeak enqueue boundary also defensively refuses dropout telemetry.
+  * **Live event semantics and wiring:** REST-injected events reject `duration_seconds` with `DURATION_NOT_ALLOWED` and remain active until DELETE/clear. The main callback wiring uses the correct event argument order, replay loads the saved configuration snapshot, and the HUD renders stale physical data grey.
+* **Consequences:** The live integration now preserves physical-vs-simulated identity, deterministic state access, rate-limit compliance, and lossless shutdown logging across Deliverables #4–#7. The complete suite passes with **411 tests** after this hardening, including regression coverage for each boundary above. Commit `6095f04` contains the implementation.

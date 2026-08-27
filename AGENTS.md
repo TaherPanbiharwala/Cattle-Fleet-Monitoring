@@ -66,8 +66,10 @@ The platform is designed around the reality that only **one physical collar (ESP
    - **Never** post faster than the 15-second physical floor to any ThingSpeak channel.
    - Default posting cadence for Channel 2 multiplexer is **30 seconds**.
    - Keep combined annual usage strictly below 3,000,000 writes (~8,200 writes/day).
+   - The writer enforces this as an absolute wall-clock gate before every POST attempt, including retries and queued backlog.
 3. **No Solar Recharge:**
    Collar hardware has no solar panels. Battery level (0–100%) must only deplete based on activity drain ($1\times$ base, $3\times$ during breach/alert bursts). When battery hits 0%, collar triggers dropout. Dropout telemetry must report as **stale and critical** (`risk_score=100`, red band) — never a fabricated healthy score just because no fresh data exists (see ADR-017; this was violated once already and fixed).
+   Reserved physical identity **ID 1 is never simulated**. Until a complete, fresh Channel 1 row arrives, expose it locally as stale and critical (`risk_score=100`, red/grey presentation). A GPS-only Channel 1 fix may anchor herd movement, but does not make ID 1 telemetry fresh; once a complete row arrives, use its actual values.
 4. **Strict Mathematical Determinism:**
    Given the same configuration, scenario, and random seed (default `42`), the simulation must produce byte-identical normalized telemetry across runs.
 5. **No Secrets in Code:**
@@ -78,6 +80,8 @@ The platform is designed around the reality that only **one physical collar (ESP
    All health outputs must be presented as *"Predicted Risk Score"* or *"Anomaly Indicator"*. Never generate output claiming to provide a clinical diagnosis or medical treatment.
 8. **Phase Isolation:**
    Phase 1 (MVP Digital Twin) must run independently without dependencies on Phase 2 (ESP32) or Phase 3 (ML models).
+9. **Live State Synchronization:**
+   The simulation tick, REST API, and Channel 1 sniffer must access shared simulator state through `Simulator.state_lock`. HUD collections use their own lock; HTTP handlers must not mutate active events outside the simulator lock.
 
 ---
 
@@ -235,8 +239,10 @@ When the simulator runs with the local HUD server enabled (`--hud`, binds to `12
 * `GET /api/state` — Complete snapshot of all 20 cattle (positions, states, risks, battery).
 * `GET /api/history?id=<id>&limit=<n>` — Historical telemetry for a specific cow (1–10,000 records).
 * `GET /api/queue` — Current round-robin transmission queue and priority slots.
-* `POST /api/events` — Inject a live anomaly event (accepts JSON event payload, returns `201`).
+* `POST /api/events` — Inject a live anomaly event (accepts JSON event payload, returns `201`). Live events must omit `duration_seconds` and run until explicitly cleared.
 * `DELETE /api/events/<event_id>` — Clear an active injected event (returns `204`).
+
+The local state/API/HUD may include a `stale` flag for physical-collar freshness; it is presentation metadata and never changes the ThingSpeak `field1`–`field8`/`status` contract. Invalid live events that include `duration_seconds` return `DURATION_NOT_ALLOWED`.
 
 Standard Error Format:
 ```json
