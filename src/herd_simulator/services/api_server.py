@@ -6,11 +6,11 @@ via JSON endpoints and serves the Leaflet.js web dashboard.
 
 Threading model:
   - The HTTP server runs in a daemon thread (same pattern as ThingSpeakClient).
-  - Read-only sim state is accessed directly under the GIL.
+  - Simulator state is read and mutated under ``Simulator.state_lock``.
   - Mutable HUD-specific state (history buffer, latest snapshot) is protected
     by a single threading.Lock.
   - Event injection calls activate_event()/clear directly from the handler
-    thread under the same lock (GIL-safe dict mutations + lock for _next_id).
+    thread under the simulator lock.
 
 Wiring:
   wire_api_server() MUST be called AFTER wire_logger() and wire_thingspeak().
@@ -125,14 +125,17 @@ def _telemetry_to_dict(t: AnimalTelemetry) -> dict[str, Any]:
         "battery_pct": round(t.battery_pct, 2),
         "event_codes": t.event_codes,
         "dropped_out": t.dropped_out,
+        "stale": t.stale,
     }
 
 
 def _base_envelope(hs: HudState) -> dict[str, Any]:
+    with hs.sim.state_lock:
+        sim_second = hs.sim.clock.sim_second
     return {
         "schema_version": SCHEMA_VERSION,
         "run_id": hs.run_id,
-        "sim_second": hs.sim.clock.sim_second,
+        "sim_second": sim_second,
     }
 
 
@@ -255,43 +258,56 @@ class HudRequestHandler(BaseHTTPRequestHandler):
         except (ImportError, AttributeError):
             mem_mb = 0.0
 
+        with sim.state_lock:
+            sim_mode = sim.clock.mode.value
+            paused = sim.paused
+            herd_size = sim.cfg.herd.n_total
+            active_events = len(sim.event_state.active)
+            queue_depth = len(sim.scheduler_state.priority_queue) + len(sim.scheduler_state.rr_queue)
+
         data = _base_envelope(self.hs)
         data.update({
             "uptime_seconds": round(time.monotonic() - self.hs.start_time, 1),
-            "sim_mode": sim.clock.mode.value,
-            "paused": sim.paused,
-            "herd_size": sim.cfg.herd.n_total,
-            "active_events": len(sim.event_state.active),
-            "queue_depth": len(sim.scheduler_state.priority_queue) + len(sim.scheduler_state.rr_queue),
+            "sim_mode": sim_mode,
+            "paused": paused,
+            "herd_size": herd_size,
+            "active_events": active_events,
+            "queue_depth": queue_depth,
             "memory_rss_mb": round(mem_mb, 1),
         })
         self._send_json(data)
 
     def _handle_state(self) -> None:
         sim = self.hs.sim
+        with sim.state_lock:
+            sim_second = sim.clock.sim_second
+            active_events: dict[str, Any] = {}
+            for (aid, etype), ae in sim.event_state.active.items():
+                eid = ae.event.event_id or ""
+                active_events[eid] = {
+                    "animal_id": aid,
+                    "event_type": etype,
+                    "activated_at": ae.activated_at,
+                    "elapsed_s": sim_second - ae.activated_at,
+                }
+            ambient_temp_c = round(sim._ambient_temp_c, 2)
+            humidity_pct = round(sim._humidity_pct, 2)
+            thi = round(sim._thi, 2)
+            centroid = [round(sim.centroid[0], 6), round(sim.centroid[1], 6)]
+            pasture_polygon = [
+                [round(lat, 6), round(lon, 6)]
+                for lat, lon in sim.cfg.pasture_polygon
+            ]
         with self.hs.lock:
             animals = [_telemetry_to_dict(t) for t in self.hs.latest_telemetry]
 
-        active_events: dict[str, Any] = {}
-        for (aid, etype), ae in list(sim.event_state.active.items()):
-            eid = ae.event.event_id or ""
-            active_events[eid] = {
-                "animal_id": aid,
-                "event_type": etype,
-                "activated_at": ae.activated_at,
-                "elapsed_s": sim.clock.sim_second - ae.activated_at,
-            }
-
         data = _base_envelope(self.hs)
         data.update({
-            "ambient_temp_c": round(sim._ambient_temp_c, 2),
-            "humidity_pct": round(sim._humidity_pct, 2),
-            "thi": round(sim._thi, 2),
-            "centroid": [round(sim.centroid[0], 6), round(sim.centroid[1], 6)],
-            "pasture_polygon": [
-                [round(lat, 6), round(lon, 6)]
-                for lat, lon in sim.cfg.pasture_polygon
-            ],
+            "ambient_temp_c": ambient_temp_c,
+            "humidity_pct": humidity_pct,
+            "thi": thi,
+            "centroid": centroid,
+            "pasture_polygon": pasture_polygon,
             "animals": animals,
             "active_events": active_events,
         })
@@ -368,7 +384,8 @@ class HudRequestHandler(BaseHTTPRequestHandler):
         self._send_json(data)
 
     def _handle_queue(self) -> None:
-        snapshot = get_queue_snapshot(self.hs.sim.scheduler_state)
+        with self.hs.sim.state_lock:
+            snapshot = get_queue_snapshot(self.hs.sim.scheduler_state)
 
         data = _base_envelope(self.hs)
         data.update(snapshot)
@@ -461,22 +478,23 @@ class HudRequestHandler(BaseHTTPRequestHandler):
 
         duration = body.get("duration_seconds")
         if duration is not None:
-            if not isinstance(duration, int) or duration <= 0:
-                self._send_json(
-                    _error_body("INVALID_PARAMETER", "'duration_seconds' must be a positive integer."),
-                    422,
-                )
-                return
+            self._send_json(
+                _error_body(
+                    "DURATION_NOT_ALLOWED",
+                    "Live API events run until explicitly cleared; omit 'duration_seconds'.",
+                ),
+                422,
+            )
+            return
 
         sim = self.hs.sim
-        with self.hs.lock:
+        with sim.state_lock:
             event_id = activate_event(
                 sim.event_state,
                 raw_aid,
                 evt_type,
                 sim.clock.sim_second,
                 params=params,
-                duration_seconds=duration,
             )
             if raw_aid >= 2:
                 enqueue_priority(sim.scheduler_state, raw_aid)
@@ -493,7 +511,7 @@ class HudRequestHandler(BaseHTTPRequestHandler):
         self._send_json(resp, 201)
 
     def _handle_delete_event(self, event_id: str) -> None:
-        with self.hs.lock:
+        with self.hs.sim.state_lock:
             result = _clear_event_with_info(self.hs, event_id)
 
         if result is None:

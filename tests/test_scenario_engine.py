@@ -549,7 +549,7 @@ class TestSimulatorIntegration:
         for _ in range(50):
             telemetry = tick(sim)
             for t in telemetry:
-                assert t.behaviour in (0, 1, 2, 3, 4), f"Invalid behaviour code {t.behaviour}"
+                assert t.behaviour in (0, 1, 2, 3, 4, 5), f"Invalid behaviour code {t.behaviour}"
 
     def test_geofence_status_valid(self, cfg):
         sim = create_simulator(cfg, SimMode.DRY_RUN)
@@ -585,6 +585,29 @@ class TestSimulatorIntegration:
         t5 = [t for t in telemetry if t.animal_id == 5][0]
         assert t5.dropped_out is True
         assert t5.battery_pct == 0.0
+
+    def test_dropped_out_collar_is_skipped_by_scheduler(self, cfg):
+        """A dropout is logged as skipped and never reaches on_transmit."""
+        sim = create_simulator(cfg, SimMode.DRY_RUN)
+        sent: list[int] = []
+        skipped: list[tuple[int, str]] = []
+        sim.on_transmit = lambda t: sent.append(t.animal_id)
+        sim.on_transmission_skipped = lambda t, reason: skipped.append((t.animal_id, reason))
+        activate_event(sim.event_state, 2, EventType.COLLAR_DROPOUT, sim.clock.sim_second)
+
+        tick(sim)
+
+        assert 2 not in sent
+        assert skipped == [(2, "collar_dropout")]
+
+    def test_physical_collar_is_stale_until_channel1_data_arrives(self, cfg):
+        sim = create_simulator(cfg, SimMode.DRY_RUN)
+        physical = next(t for t in tick(sim) if t.animal_id == 1)
+        assert physical.is_physical is True
+        assert physical.stale is True
+        assert physical.risk_score == 100
+        assert physical.alert_band == "red"
+        assert physical.behaviour == 5
 
     def test_dropout_reports_critical_not_fabricated_healthy(self, cfg):
         """Master PRD: 'the HUD marks the cow stale and critical instead

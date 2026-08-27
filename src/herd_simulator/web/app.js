@@ -121,7 +121,7 @@ function updatePolygon(polygon) {
 function updateMarkers(animals) {
   animals.forEach(function(a) {
     var id = a.animal_id;
-    var color = a.dropped_out ? COLORS.grey : (COLORS[a.alert_band] || COLORS.green);
+    var color = (a.stale || a.dropped_out) ? COLORS.grey : (COLORS[a.alert_band] || COLORS.green);
     var latlng = [a.latitude, a.longitude];
 
     if (markers[id]) {
@@ -153,7 +153,7 @@ function updateTable(animals) {
   var sorted = animals.slice().sort(function(a, b) { return a.animal_id - b.animal_id; });
 
   var rows = sorted.map(function(a) {
-    var band = a.dropped_out ? "grey" : a.alert_band;
+    var band = (a.stale || a.dropped_out) ? "grey" : a.alert_band;
     return '<tr class="band-' + band + '">' +
       "<td>" + a.animal_id + (a.is_physical ? " ⭐" : "") + "</td>" +
       "<td>" + val(a.body_temp_c, 1) + "</td>" +

@@ -13,8 +13,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from herd_simulator.config import ThingSpeakConfig
-from herd_simulator.engine.simulator import AnimalTelemetry, SimMode
+from herd_simulator.config import ThingSpeakConfig, load_config
+from herd_simulator.engine.simulator import AnimalTelemetry, SimMode, create_simulator, tick
 from herd_simulator.services.thingspeak import (
     THINGSPEAK_UPDATE_URL,
     BackoffState,
@@ -374,6 +374,14 @@ class TestClientModeGating:
         client.enqueue_write(_make_telemetry())
         assert not client._write_queue.empty()
 
+    def test_live_skips_dropped_out_collar(self):
+        client = ThingSpeakClient(_make_ts_config(), _make_credentials(), SimMode.LIVE)
+        outcomes = []
+        client.on_write_result = lambda *args: outcomes.append(args)
+        client.enqueue_write(_make_telemetry(dropped_out=True, animal_id=5, sim_second=9))
+        assert client._write_queue.empty()
+        assert outcomes == [(5, 9, "skipped", None, 0)]
+
     def test_start_noop_in_dry_run(self):
         cfg = _make_ts_config()
         client = ThingSpeakClient(cfg, _make_credentials(), SimMode.DRY_RUN)
@@ -456,11 +464,11 @@ class TestWriterThread:
         ]
         cfg = _make_ts_config(backoff_base_s=1, backoff_max_s=1)
         client = ThingSpeakClient(cfg, _make_credentials(), SimMode.LIVE)
-        client.start()
-
-        client.enqueue_write(_make_telemetry())
-        time.sleep(3.0)
-        client.stop()
+        with patch.object(client, "_wait_for_post_slot", return_value=True):
+            client.start()
+            client.enqueue_write(_make_telemetry())
+            time.sleep(3.0)
+            client.stop()
 
         assert mock_post.call_count == 2
         assert client._quota.annual_count == 1
@@ -470,11 +478,11 @@ class TestWriterThread:
         mock_post.side_effect = urllib.error.URLError("always fail")
         cfg = _make_ts_config(backoff_base_s=1, backoff_max_s=1)
         client = ThingSpeakClient(cfg, _make_credentials(), SimMode.LIVE)
-        client.start()
-
-        client.enqueue_write(_make_telemetry())
-        time.sleep(6.0)
-        client.stop()
+        with patch.object(client, "_wait_for_post_slot", return_value=True):
+            client.start()
+            client.enqueue_write(_make_telemetry())
+            time.sleep(6.0)
+            client.stop()
 
         assert mock_post.call_count == 4
         assert client._quota.annual_count == 0
@@ -487,14 +495,23 @@ class TestWriterThread:
         ]
         cfg = _make_ts_config(backoff_base_s=1, backoff_max_s=1)
         client = ThingSpeakClient(cfg, _make_credentials(), SimMode.LIVE)
-        client.start()
-
-        client.enqueue_write(_make_telemetry())
-        time.sleep(3.0)
-        client.stop()
+        with patch.object(client, "_wait_for_post_slot", return_value=True):
+            client.start()
+            client.enqueue_write(_make_telemetry())
+            time.sleep(3.0)
+            client.stop()
 
         assert mock_post.call_count == 2
         assert client._quota.annual_count == 1
+
+    def test_waits_for_absolute_physical_post_floor(self):
+        client = ThingSpeakClient(_make_ts_config(), _make_credentials(), SimMode.LIVE)
+        client._last_post_monotonic = 100.0
+        with patch("herd_simulator.services.thingspeak.time.monotonic", side_effect=[105.0, 115.0]), \
+             patch.object(client._stop_event, "wait", return_value=False) as wait:
+            assert client._wait_for_post_slot() is True
+        wait.assert_called_once_with(10.0)
+        assert client._last_post_monotonic == 115.0
 
     @patch("herd_simulator.services.thingspeak._http_post")
     def test_quota_blocks_write(self, mock_post):
@@ -564,6 +581,33 @@ class TestSnifferThread:
         client.stop()
 
         assert client.get_collar1_fix() is None
+
+    @patch("herd_simulator.services.thingspeak._http_get")
+    def test_complete_channel1_record_is_forwarded_to_simulator(self, mock_get):
+        mock_get.return_value = (200, json.dumps({
+            "field1": "39.2", "field2": "73.5", "field3": "3",
+            "field4": "12.9716", "field5": "79.1589", "field6": "55",
+            "field7": "1", "field8": "82", "status": "id=01;evt=FEVER",
+            "created_at": "2026-08-27T10:00:00Z",
+        }).encode())
+        cfg = load_config("config/default_config.yaml")
+        sim = create_simulator(cfg, SimMode.LIVE)
+        sim.clock.wall_start = time.monotonic() - 1.0
+        client = ThingSpeakClient(cfg.thingspeak, _make_credentials(), SimMode.LIVE)
+        wire_thingspeak(sim, client)
+
+        fix = client._fetch_channel1()
+        assert fix is not None
+        assert client.on_collar1_fix is not None
+        client.on_collar1_fix(fix)
+        rows = tick(sim)
+        physical = next(t for t in rows if t.animal_id == 1)
+
+        assert sim.collar1_anchor == (12.9716, 79.1589)
+        assert physical.stale is False
+        assert physical.body_temp_c == 39.2
+        assert physical.risk_score == 55
+        assert physical.event_codes == ["FEVER"]
 
 
 # =======================================================================

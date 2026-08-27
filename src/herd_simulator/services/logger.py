@@ -365,6 +365,23 @@ def log_write_result(
     _write_line(rl.transmissions_writer, json.dumps(record, separators=(",", ":")))
 
 
+def log_skipped_transmission(
+    rl: RunLogger,
+    t: AnimalTelemetry,
+    reason: str,
+) -> None:
+    """Record an intentional no-send without counting it as a write."""
+    if rl.transmissions_writer is None:
+        return
+    record = {
+        "type": "skipped",
+        "reason": reason,
+        "sim_second": t.sim_second,
+        "animal_id": t.animal_id,
+    }
+    _write_line(rl.transmissions_writer, json.dumps(record, separators=(",", ":")))
+
+
 # -----------------------------------------------------------------------
 # Ground truth
 # -----------------------------------------------------------------------
@@ -447,6 +464,9 @@ def wire_logger(sim: Simulator, rl: RunLogger) -> None:
     def _on_transmit(t: AnimalTelemetry) -> None:
         log_transmission(rl, t)
 
+    def _on_transmission_skipped(t: AnimalTelemetry, reason: str) -> None:
+        log_skipped_transmission(rl, t, reason)
+
     def _on_event_activated(event_id: str, animal_id: int, event_type: str) -> None:
         from herd_simulator.engine.scenario_runner import get_active_event, EventType
         ae = get_active_event(sim.event_state, animal_id, EventType(event_type))
@@ -473,6 +493,7 @@ def wire_logger(sim: Simulator, rl: RunLogger) -> None:
 
     sim.on_telemetry = _on_telemetry
     sim.on_transmit = _on_transmit
+    sim.on_transmission_skipped = _on_transmission_skipped
     sim.on_event_activated = _on_event_activated
     sim.on_event_expired = _on_event_expired
     sim.on_event_cleared = _on_event_cleared

@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -27,6 +28,8 @@ from herd_simulator.config import load_config
 from herd_simulator.env_loader import load_dotenv
 from main import (
     _build_parser,
+    _load_replay_config,
+    _log_thingspeak_write_result,
     _replay_row_to_telemetry,
     main,
     run_replay,
@@ -197,6 +200,23 @@ class TestCLIRunner:
         parser = _build_parser()
         args = parser.parse_args(["--mode", "replay", "--log-dir", str(tmp_path / "nonexistent")])
         assert run_replay(args) == 1
+
+    def test_replay_prefers_saved_config_snapshot(self, tmp_path):
+        snapshot = tmp_path / "config.snapshot.json"
+        config_data = yaml.safe_load(Path("config/default_config.yaml").read_text())
+        config_data["hud"]["port"] = 8765
+        snapshot.write_text(json.dumps(config_data))
+
+        cfg = _load_replay_config("does-not-exist.yaml", tmp_path)
+
+        assert cfg.hud.port == 8765
+
+    def test_write_result_logging_preserves_callback_argument_order(self):
+        run_logger = MagicMock()
+        with patch("main.log_write_result") as log_result:
+            _log_thingspeak_write_result(run_logger, 7, 123, "success", 200, 1)
+
+        log_result.assert_called_once_with(run_logger, 7, 123, "success", 200, 1)
 
     def test_invalid_config_path(self, tmp_path):
         parser = _build_parser()

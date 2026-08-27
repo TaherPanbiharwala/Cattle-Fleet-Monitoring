@@ -201,6 +201,35 @@ def _replay_row_to_telemetry(r: ReplayRow, alert_bands: tuple[int, int] = (39, 6
     )
 
 
+def _load_replay_config(config_path: str, log_dir: Path) -> SimulatorConfig:
+    """Load the exact saved configuration when a replay snapshot exists."""
+    config_snapshot = log_dir / "config.snapshot.json"
+    if config_snapshot.exists():
+        return load_config(config_snapshot)
+    if Path(config_path).exists():
+        return load_config(config_path)
+    return load_config("config/default_config.yaml")
+
+
+def _log_thingspeak_write_result(
+    run_logger: RunLogger,
+    animal_id: int,
+    sim_second: int,
+    outcome: str,
+    status_code: Optional[int],
+    attempts: int,
+) -> None:
+    """Preserve the client's (animal_id, sim_second) callback ordering."""
+    log_write_result(
+        run_logger,
+        animal_id,
+        sim_second,
+        outcome,
+        status_code,
+        attempts,
+    )
+
+
 def run_replay(args: argparse.Namespace) -> int:
     """Execute replay mode from a prior run directory."""
     if not args.log_dir:
@@ -226,12 +255,11 @@ def run_replay(args: argparse.Namespace) -> int:
     run_id = manifest.get("run_id", log_dir.name)
     logger.info("Loaded replay for run: %s (dir: %s)", run_id, log_dir)
 
-    # Load config if snapshot exists or load default
-    config_snapshot = log_dir / "config.snapshot.json"
-    if Path(args.config).exists():
-        cfg = load_config(args.config)
-    else:
-        cfg = load_config("config/default_config.yaml")
+    try:
+        cfg = _load_replay_config(args.config, log_dir)
+    except (ConfigError, FileNotFoundError) as exc:
+        logger.error("Replay configuration error: %s", exc)
+        return 1
 
     if args.port is not None:
         cfg = dataclasses.replace(cfg, hud=dataclasses.replace(cfg.hud, port=args.port))
@@ -398,7 +426,14 @@ def run_simulator(args: argparse.Namespace) -> int:
         status_code: Optional[int],
         attempts: int,
     ) -> None:
-        log_write_result(run_logger, ss, animal_id, outcome, status_code, attempts)
+        _log_thingspeak_write_result(
+            run_logger,
+            animal_id,
+            ss,
+            outcome,
+            status_code,
+            attempts,
+        )
 
     ts_client.on_write_result = _on_ts_write_result
     ts_client.start()
@@ -454,6 +489,10 @@ def run_simulator(args: argparse.Namespace) -> int:
         elapsed = time.monotonic() - start_time
         logger.info("Shutting down services and flushing logs...")
 
+        # Stop writers before closing files so callbacks cannot write through
+        # closed buffered handles during shutdown.
+        ts_client.stop()
+
         # Write summary and close logger
         write_summary(
             run_logger,
@@ -463,8 +502,7 @@ def run_simulator(args: argparse.Namespace) -> int:
         )
         close_logger(run_logger)
 
-        # Stop ThingSpeak and HUD
-        ts_client.stop()
+        # Stop HUD and CLI
         if hud_server:
             hud_server.stop()
         if cli_stop:

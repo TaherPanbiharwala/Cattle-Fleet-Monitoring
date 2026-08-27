@@ -29,6 +29,7 @@ from typing import Callable, Optional
 from herd_simulator.config import ThingSpeakConfig
 from herd_simulator.engine.simulator import AnimalTelemetry, SimMode, Simulator
 from herd_simulator.utils.geo import Coord
+from herd_simulator.utils.risk import classify_alert
 
 _log = logging.getLogger(__name__)
 
@@ -65,6 +66,13 @@ class SniffedFix:
     longitude: float
     created_at_iso: str
     fetched_at_monotonic: float
+    body_temp_c: Optional[float] = None
+    thi: Optional[float] = None
+    behaviour: Optional[int] = None
+    risk_score: Optional[int] = None
+    geofence_status: Optional[int] = None
+    battery_pct: Optional[float] = None
+    event_codes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -117,6 +125,54 @@ def parse_channel1_response(raw_json: bytes) -> Optional[tuple[float, float, str
     except (KeyError, TypeError, ValueError):
         return None
     return (lat, lon, created)
+
+
+def _parse_channel1_measurements(
+    raw_json: bytes,
+) -> Optional[tuple[float, float, int, int, int, float, tuple[str, ...]]]:
+    """Parse a complete Channel-1 telemetry row for the physical collar.
+
+    GPS alone is sufficient to anchor the virtual herd, but a physical
+    Collar-1 HUD record is considered fresh only when all remaining telemetry
+    fields are present and valid.
+    """
+    try:
+        data = json.loads(raw_json)
+        body_temp = float(data["field1"])
+        thi = float(data["field2"])
+        behaviour = int(data["field3"])
+        risk_score = int(data["field6"])
+        geofence_status = int(data["field7"])
+        battery_pct = float(data["field8"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+    if not (
+        35.0 <= body_temp <= 43.0
+        and 0.0 <= thi <= 200.0
+        and behaviour in range(0, 6)
+        and 0 <= risk_score <= 100
+        and geofence_status in range(0, 3)
+        and 0.0 <= battery_pct <= 100.0
+    ):
+        return None
+
+    event_codes: tuple[str, ...] = ()
+    status = data.get("status")
+    if isinstance(status, str):
+        for component in status.split(";"):
+            if component.startswith("evt="):
+                event_codes = tuple(code for code in component[4:].split("|") if code)
+                break
+    return (
+        body_temp,
+        thi,
+        behaviour,
+        risk_score,
+        geofence_status,
+        battery_pct,
+        event_codes,
+    )
 
 
 def check_quota(state: QuotaState) -> tuple[bool, Optional[str]]:
@@ -200,6 +256,7 @@ class ThingSpeakClient:
             warning_pct=cfg.quota_warning_pct,
         )
         self._backoff = BackoffState()
+        self._last_post_monotonic = 0.0
 
         self._latest_fix: Optional[SniffedFix] = None
         self._fix_lock = threading.Lock()
@@ -208,6 +265,7 @@ class ThingSpeakClient:
         self._sniffer_thread: Optional[threading.Thread] = None
 
         self.on_write_result: Optional[Callable[..., None]] = None
+        self.on_collar1_fix: Optional[Callable[[SniffedFix], None]] = None
 
     def start(self) -> None:
         if self._mode != SimMode.LIVE:
@@ -236,9 +294,17 @@ class ThingSpeakClient:
 
     def stop(self) -> None:
         self._stop_event.set()
+        for thread in (self._writer_thread, self._sniffer_thread):
+            if thread is not None and thread.is_alive():
+                thread.join(timeout=HTTP_TIMEOUT_S + 1)
+        self._drain_pending_writes()
 
     def enqueue_write(self, t: AnimalTelemetry) -> None:
         if self._mode != SimMode.LIVE:
+            return
+        if t.dropped_out:
+            _log.info("Skipping dropped-out collar %d at ss=%d", t.animal_id, t.sim_second)
+            self._notify_write_result(t.animal_id, t.sim_second, "skipped", attempts=0)
             return
         fields = telemetry_to_fields(t)
         req = WriteRequest(animal_id=t.animal_id, sim_second=t.sim_second, fields=fields)
@@ -270,6 +336,9 @@ class ThingSpeakClient:
                 req = self._write_queue.get(timeout=1.0)
             except queue.Empty:
                 continue
+            if self._stop_event.is_set():
+                self._notify_write_result(req.animal_id, req.sim_second, "stopped", attempts=0)
+                break
             self._execute_write(req)
 
     def _execute_write(self, req: WriteRequest) -> None:
@@ -283,6 +352,10 @@ class ThingSpeakClient:
         body = format_post_body(req.fields, self._write_api_key)
         for attempt in range(MAX_RETRY_ATTEMPTS):
             if self._stop_event.is_set():
+                self._notify_write_result(req.animal_id, req.sim_second, "stopped", attempts=attempt)
+                return
+            if not self._wait_for_post_slot():
+                self._notify_write_result(req.animal_id, req.sim_second, "stopped", attempts=attempt)
                 return
             try:
                 status, resp_body = _http_post(THINGSPEAK_UPDATE_URL, body, HTTP_TIMEOUT_S)
@@ -321,6 +394,11 @@ class ThingSpeakClient:
             if fix is not None:
                 with self._fix_lock:
                     self._latest_fix = fix
+                if self.on_collar1_fix is not None:
+                    try:
+                        self.on_collar1_fix(fix)
+                    except Exception:
+                        _log.exception("Channel 1 fix callback failed")
             self._stop_event.wait(self._cfg.channel_1_sniff_interval_s)
 
     def _fetch_channel1(self) -> Optional[SniffedFix]:
@@ -338,11 +416,27 @@ class ThingSpeakClient:
         if parsed is None:
             return None
         lat, lon, created = parsed
+        measurements = _parse_channel1_measurements(body)
+        if measurements is None:
+            return SniffedFix(
+                latitude=lat,
+                longitude=lon,
+                created_at_iso=created,
+                fetched_at_monotonic=time.monotonic(),
+            )
+        body_temp, thi, behaviour, risk_score, geofence_status, battery_pct, event_codes = measurements
         return SniffedFix(
             latitude=lat,
             longitude=lon,
             created_at_iso=created,
             fetched_at_monotonic=time.monotonic(),
+            body_temp_c=body_temp,
+            thi=thi,
+            behaviour=behaviour,
+            risk_score=risk_score,
+            geofence_status=geofence_status,
+            battery_pct=battery_pct,
+            event_codes=event_codes,
         )
 
     # --- Internal helpers ---
@@ -358,6 +452,28 @@ class ThingSpeakClient:
         if self.on_write_result is not None:
             self.on_write_result(animal_id, sim_second, outcome, status_code, attempts)
 
+    def _wait_for_post_slot(self) -> bool:
+        """Wait for the absolute Channel-2 physical posting floor.
+
+        Scheduler cadence limits simulated time, but retries and queued writes
+        are paced in wall-clock time here. The timestamp is recorded before
+        every attempt so failed requests cannot create a back-to-back burst.
+        """
+        min_interval_s = max(15.0, float(self._cfg.min_interval_s))
+        remaining = min_interval_s - (time.monotonic() - self._last_post_monotonic)
+        if remaining > 0 and self._stop_event.wait(remaining):
+            return False
+        self._last_post_monotonic = time.monotonic()
+        return True
+
+    def _drain_pending_writes(self) -> None:
+        while True:
+            try:
+                req = self._write_queue.get_nowait()
+            except queue.Empty:
+                return
+            self._notify_write_result(req.animal_id, req.sim_second, "stopped", attempts=0)
+
 
 # -----------------------------------------------------------------------
 # Wiring
@@ -369,6 +485,7 @@ def wire_thingspeak(sim: Simulator, client: ThingSpeakClient) -> None:
     MUST be called AFTER wire_logger() to chain on_transmit correctly.
     """
     existing_on_transmit = sim.on_transmit
+    existing_on_collar1_fix = client.on_collar1_fix
 
     def _on_transmit(t: AnimalTelemetry) -> None:
         if existing_on_transmit:
@@ -376,3 +493,67 @@ def wire_thingspeak(sim: Simulator, client: ThingSpeakClient) -> None:
         client.enqueue_write(t)
 
     sim.on_transmit = _on_transmit
+
+    def _on_collar1_fix(fix: SniffedFix) -> None:
+        with sim.state_lock:
+            sim.collar1_anchor = (fix.latitude, fix.longitude)
+            sim.collar1_anchor_time = fix.fetched_at_monotonic
+            sim.collar1_telemetry = _physical_telemetry_from_fix(sim, fix)
+        if existing_on_collar1_fix:
+            existing_on_collar1_fix(fix)
+
+    client.on_collar1_fix = _on_collar1_fix
+
+
+def _physical_telemetry_from_fix(
+    sim: Simulator,
+    fix: SniffedFix,
+) -> Optional[AnimalTelemetry]:
+    """Convert a complete Channel-1 sample into an ID-1 HUD record."""
+    values = (
+        fix.body_temp_c,
+        fix.thi,
+        fix.behaviour,
+        fix.risk_score,
+        fix.geofence_status,
+        fix.battery_pct,
+    )
+    if any(value is None for value in values):
+        return None
+
+    assert fix.body_temp_c is not None
+    assert fix.thi is not None
+    assert fix.behaviour is not None
+    assert fix.risk_score is not None
+    assert fix.geofence_status is not None
+    assert fix.battery_pct is not None
+    dropped_out = fix.battery_pct <= 0.0 or "DROPOUT" in fix.event_codes
+    risk_score = 100 if dropped_out else fix.risk_score
+    event_codes = list(fix.event_codes)
+    if dropped_out and "DROPOUT" not in event_codes:
+        event_codes.append("DROPOUT")
+    return AnimalTelemetry(
+        animal_id=sim.cfg.herd.physical_collar_id,
+        is_physical=True,
+        sim_second=sim.clock.sim_second,
+        body_temp_c=fix.body_temp_c,
+        thi=fix.thi,
+        behaviour=fix.behaviour,
+        latitude=fix.latitude,
+        longitude=fix.longitude,
+        risk_score=risk_score,
+        alert_band=(
+            "red"
+            if dropped_out
+            else classify_alert(
+                risk_score,
+                sim.cfg.risk.alert_bands.green_max,
+                sim.cfg.risk.alert_bands.yellow_max,
+            )
+        ),
+        geofence_status=fix.geofence_status,
+        battery_pct=fix.battery_pct,
+        event_codes=event_codes,
+        dropped_out=dropped_out,
+        stale=False,
+    )

@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import logging
 import random
+import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -161,7 +162,7 @@ class AnimalTelemetry:
     sim_second: int
     body_temp_c: float
     thi: float
-    behaviour: int          # Behaviour code (0–4)
+    behaviour: int          # Behaviour code (0–5; 5 = Other/Unknown)
     latitude: float
     longitude: float
     risk_score: int         # 0–100
@@ -170,6 +171,9 @@ class AnimalTelemetry:
     battery_pct: float
     event_codes: list[str]  # ["FEVER", "BREACH", ...]
     dropped_out: bool
+    # `stale` is local HUD state only. It never changes the 8-field
+    # ThingSpeak contract.
+    stale: bool = False
 
 
 # -----------------------------------------------------------------------
@@ -201,6 +205,7 @@ class Simulator:
     # Callbacks for external integration (ThingSpeak writer, logger, etc.)
     on_telemetry: Optional[Callable[[AnimalTelemetry], None]] = None
     on_transmit: Optional[Callable[[AnimalTelemetry], None]] = None
+    on_transmission_skipped: Optional[Callable[[AnimalTelemetry, str], None]] = None
     on_event_activated: Optional[Callable[[str, int, str], None]] = None
     on_event_expired: Optional[Callable[[str, int, str], None]] = None
     on_event_cleared: Optional[Callable[[str, int, str], None]] = None
@@ -209,6 +214,12 @@ class Simulator:
     # Collar-1 anchor for centroid sniffing (ADR-010)
     collar1_anchor: Optional[Coord] = None
     collar1_anchor_time: float = 0.0
+    collar1_telemetry: Optional[AnimalTelemetry] = None
+
+    # The tick loop, REST handlers, and ThingSpeak sniffer share this state.
+    # An RLock permits integration callbacks to take a consistent snapshot
+    # while tick() is already holding the lock.
+    state_lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     # Control flags
     paused: bool = False
@@ -341,8 +352,13 @@ def tick(sim: Simulator) -> list[AnimalTelemetry]:
     (used for logging). The scheduler separately decides which one
     gets transmitted to ThingSpeak.
     """
-    # 0. Advance clock
     sim.clock.tick()
+    with sim.state_lock:
+        return _tick_locked(sim)
+
+
+def _tick_locked(sim: Simulator) -> list[AnimalTelemetry]:
+    """Run one tick while holding ``Simulator.state_lock``."""
     ss = sim.clock.sim_second
     hour = sim.clock.hour_of_day
 
@@ -431,14 +447,25 @@ def tick(sim: Simulator) -> list[AnimalTelemetry]:
 
     if is_write_allowed(sim.scheduler_state, now_ts, sched_cfg.min_interval_s):
         if now_ts - sim.scheduler_state.last_write_time >= cadence or sim.scheduler_state.total_writes == 0:
-            tx_id = next_animal(sim.scheduler_state, sched_cfg)
-            if tx_id is not None:
+            telemetry_by_id = {t.animal_id: t for t in telemetry}
+            # A dropout must never consume a write slot. Continue through
+            # the current scheduler rotation until an eligible virtual collar
+            # is found, while preserving the scheduler's normal ordering.
+            for _ in range(len(sched_cfg.animal_ids)):
+                tx_id = next_animal(sim.scheduler_state, sched_cfg)
+                if tx_id is None:
+                    break
+                candidate = telemetry_by_id.get(tx_id)
+                if candidate is None:
+                    continue
+                if candidate.dropped_out:
+                    if sim.on_transmission_skipped:
+                        sim.on_transmission_skipped(candidate, "collar_dropout")
+                    continue
                 record_write(sim.scheduler_state, now_ts)
-                # Find the telemetry for this animal
-                for t in telemetry:
-                    if t.animal_id == tx_id and sim.on_transmit:
-                        sim.on_transmit(t)
-                        break
+                if sim.on_transmit:
+                    sim.on_transmit(candidate)
+                break
 
     # 7. Notify tick-complete listeners (ground truth, batch logging)
     if telemetry and sim.on_tick_complete:
@@ -451,6 +478,9 @@ def _tick_animal(sim: Simulator, state: AnimalState, ss: int, hour: float) -> An
     """Run one tick for a single animal. Updates state in-place and returns telemetry."""
     aid = state.profile.animal_id
     profile = state.profile
+
+    if profile.is_physical:
+        return _tick_physical_collar(sim, state, ss)
 
     # Skip ticking dropped-out animals (they're dead)
     if state.battery.dropped_out:
@@ -619,6 +649,77 @@ def _tick_animal(sim: Simulator, state: AnimalState, ss: int, hour: float) -> An
         battery_pct=state.battery.level_pct,
         event_codes=event_codes,
         dropped_out=state.battery.dropped_out,
+    )
+
+
+def _tick_physical_collar(
+    sim: Simulator,
+    state: AnimalState,
+    ss: int,
+) -> AnimalTelemetry:
+    """Return real Collar-1 telemetry, or an explicit stale placeholder.
+
+    ID 1 must never be advanced through the simulated physiology, behaviour,
+    movement, battery, or risk paths. It is either a fresh Channel-1 sample
+    or a stale/critical local HUD record until one arrives.
+    """
+    sample = sim.collar1_telemetry
+    is_fresh = (
+        sim.clock.mode == SimMode.LIVE
+        and sample is not None
+        and (time.monotonic() - sim.collar1_anchor_time)
+        < sim.cfg.thingspeak.channel_1_stale_threshold_s
+    )
+    if is_fresh and sample is not None:
+        state.position = (sample.latitude, sample.longitude)
+        state.body_temp_c = sample.body_temp_c
+        state.sim_second = ss
+        return AnimalTelemetry(
+            animal_id=sample.animal_id,
+            is_physical=True,
+            sim_second=ss,
+            body_temp_c=sample.body_temp_c,
+            thi=sample.thi,
+            behaviour=sample.behaviour,
+            latitude=sample.latitude,
+            longitude=sample.longitude,
+            risk_score=sample.risk_score,
+            alert_band=sample.alert_band,
+            geofence_status=sample.geofence_status,
+            battery_pct=sample.battery_pct,
+            event_codes=list(sample.event_codes),
+            dropped_out=sample.dropped_out,
+            stale=False,
+        )
+
+    # Retain only the last observed values as stale context. Risk stays
+    # critical so an offline physical collar can never look healthy.
+    body_temp = sample.body_temp_c if sample is not None else state.body_temp_c
+    thi = sample.thi if sample is not None else sim._thi
+    behaviour = sample.behaviour if sample is not None else 5
+    latitude = sample.latitude if sample is not None else state.position[0]
+    longitude = sample.longitude if sample is not None else state.position[1]
+    geofence_status = sample.geofence_status if sample is not None else 0
+    battery_pct = sample.battery_pct if sample is not None else 0.0
+    event_codes = list(sample.event_codes) if sample is not None else []
+    if "STALE" not in event_codes:
+        event_codes.append("STALE")
+    return AnimalTelemetry(
+        animal_id=state.profile.animal_id,
+        is_physical=True,
+        sim_second=ss,
+        body_temp_c=body_temp,
+        thi=thi,
+        behaviour=behaviour,
+        latitude=latitude,
+        longitude=longitude,
+        risk_score=100,
+        alert_band="red",
+        geofence_status=geofence_status,
+        battery_pct=battery_pct,
+        event_codes=event_codes,
+        dropped_out=sample.dropped_out if sample is not None else False,
+        stale=True,
     )
 
 

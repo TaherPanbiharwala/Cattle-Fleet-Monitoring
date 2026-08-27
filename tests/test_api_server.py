@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.request
 from typing import Any, Optional
+from unittest.mock import patch
 
 import pytest
 
@@ -174,6 +175,7 @@ class TestTelemetryToDict:
         assert d["alert_band"] == "green"
         assert d["geofence_status"] == 0
         assert d["dropped_out"] is False
+        assert d["stale"] is False
         assert isinstance(d["event_codes"], list)
 
     def test_floats_rounded(self):
@@ -403,7 +405,7 @@ class TestStateEndpoint:
             "animal_id", "is_physical", "sim_second", "body_temp_c",
             "thi", "behaviour", "latitude", "longitude", "risk_score",
             "alert_band", "geofence_status", "battery_pct", "event_codes",
-            "dropped_out",
+            "dropped_out", "stale",
         ):
             assert field in a, f"Missing field: {field}"
 
@@ -476,6 +478,36 @@ class TestCreateEventEndpoint:
         assert data["animal_id"] == 5
         assert data["event_type"] == "fever_onset"
 
+    def test_event_mutation_waits_for_simulator_state_lock(self, server):
+        """HTTP injection cannot modify events while a tick owns state."""
+        entered_activate_event = threading.Event()
+        results: list[int] = []
+        original_activate_event = activate_event
+
+        def observe_activation(*args, **kwargs):
+            entered_activate_event.set()
+            return original_activate_event(*args, **kwargs)
+
+        def post_event():
+            results.append(server.post("/api/events", {
+                "animal_id": 5,
+                "type": "fever_onset",
+            })[0])
+
+        with patch(
+            "herd_simulator.services.api_server.activate_event",
+            side_effect=observe_activation,
+        ):
+            with server.sim.state_lock:
+                worker = threading.Thread(target=post_event)
+                worker.start()
+                assert not entered_activate_event.wait(0.1)
+            worker.join(timeout=2)
+
+        assert not worker.is_alive()
+        assert entered_activate_event.is_set()
+        assert results == [201]
+
     def test_response_has_envelope(self, server):
         code, data = server.post("/api/events", {
             "animal_id": 3,
@@ -527,13 +559,14 @@ class TestCreateEventEndpoint:
         assert code == 400
         assert data["code"] == "INVALID_JSON"
 
-    def test_with_duration_seconds(self, server):
+    def test_duration_seconds_is_rejected_for_live_event(self, server):
         code, data = server.post("/api/events", {
             "animal_id": 7,
             "type": "heat_stress",
             "duration_seconds": 600,
         })
-        assert code == 201
+        assert code == 422
+        assert data["code"] == "DURATION_NOT_ALLOWED"
 
     def test_invalid_duration_returns_422(self, server):
         code, data = server.post("/api/events", {
@@ -542,6 +575,7 @@ class TestCreateEventEndpoint:
             "duration_seconds": -1,
         })
         assert code == 422
+        assert data["code"] == "DURATION_NOT_ALLOWED"
 
     def test_with_params(self, server):
         code, data = server.post("/api/events", {

@@ -48,6 +48,7 @@ from herd_simulator.services.logger import (
     create_run_logger,
     log_event,
     log_ground_truth_tick,
+    log_skipped_transmission,
     log_telemetry_row,
     log_transmission,
     wire_logger,
@@ -390,6 +391,22 @@ class TestTransmissionsLogging:
             log_transmission(rl, _make_telemetry())
         assert rl.total_transmissions == 3
         close_logger(rl)
+
+    def test_skipped_dropout_is_logged_without_counting_as_transmission(self, cfg, tmp_path):
+        cfg_mod = _cfg_with_log_dir(cfg, str(tmp_path / "logs"))
+        sim = create_simulator(cfg_mod, SimMode.DRY_RUN)
+        rl = create_run_logger(cfg_mod, "dry-run", sim.profiles)
+        log_skipped_transmission(rl, _make_telemetry(dropped_out=True), "collar_dropout")
+        close_logger(rl)
+
+        record = json.loads((rl.run_dir / "transmissions.jsonl").read_text().strip())
+        assert record == {
+            "type": "skipped",
+            "reason": "collar_dropout",
+            "sim_second": 1,
+            "animal_id": 2,
+        }
+        assert rl.total_transmissions == 0
 
 
 # ===================================================================
