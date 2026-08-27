@@ -31,6 +31,7 @@ This document preserves the complete historical and technical rationale for all 
 - [ADR-017: Pre-Landing Review Fixes — Deliverables #1-#3](#adr-017-pre-landing-review-fixes--deliverables-1-3)
 - [ADR-018: Logging, Ground Truth & Replay Architecture (Deliverable #4)](#adr-018-logging-ground-truth--replay-architecture-deliverable-4)
 - [ADR-019: ThingSpeak Client & Quota Enforcement (Deliverable #5)](#adr-019-thingspeak-client--quota-enforcement-deliverable-5)
+- [ADR-020: REST API Server & Web HUD (Deliverable #6)](#adr-020-rest-api-server--web-hud-deliverable-6)
 
 ---
 
@@ -296,3 +297,25 @@ This document preserves the complete historical and technical rationale for all 
   * ID 1's tick-loop behavior remains unchanged (still simulated each tick). The sniffer provides centroid anchoring for the herd, which is the correct ADR-010 behavior, but revisiting ID 1's own simulation is deferred until the sniffing integration is proven in the field (as noted in ADR-017).
   * `src/main.py` CLI entry point remains deferred (ADR-017).
 * **Consequences:** 308 tests pass (246 existing + 62 new ThingSpeak tests). The `step_centroid_anchored` import in `simulator.py` (previously flagged as an intentional placeholder in ADR-017) is now in active use. The ThingSpeak client is fully wired via `ThingSpeakClient(cfg, creds, mode)` + `client.start()` + `wire_thingspeak(sim, client)` — callable from any entry point.
+
+---
+
+## ADR-020: REST API Server & Web HUD (Deliverable #6)
+
+* **Status:** Approved
+* **Context:** Deliverables #1-5 built a complete simulation engine with logging and ThingSpeak uplink, but no way to visualize or interact with a running simulation from a browser. The Master PRD specifies a local REST API and Leaflet.js web HUD (AGENTS.md §7, HerdSimulator PRD FR-34). `HudConfig` already exists in `config.py` with validated `host`, `port`, and `poll_interval_ms`. The scheduler's `get_queue_snapshot()` and scenario runner's `activate_event()` / `clear_event_by_id()` provide the API surface needed for queue inspection and live event injection.
+* **Decision:**
+  * **Stdlib-only `ThreadingHTTPServer` in a daemon thread (`api_server.py`):** Consistent with the zero-dependency principle. `HudServer.start()` creates the server on a daemon thread; `HudServer.stop()` calls `shutdown()`. The daemon thread ensures the simulation exits cleanly even if the server hangs.
+  * **`HudState` dataclass for thread-safe shared state:** Holds a reference to `sim`, `run_id`, `start_time`, `latest_telemetry: list[AnimalTelemetry]`, `history: dict[int, collections.deque(maxlen=10_000)]`, a `threading.Lock`, and an optional `ThingSpeakClient`. The lock protects mutable collections (history buffer, latest_telemetry snapshot). Atomic reads of `sim` fields rely on the GIL.
+  * **Fan-out callback chaining on `on_tick_complete`:** `wire_api_server(sim, hud_state)` must be called after `wire_logger` and `wire_thingspeak`. It captures the existing `on_tick_complete` callback via closure and wraps both — the upstream callback (logger/ThingSpeak) runs first, then the HUD state update appends to history deques and refreshes `latest_telemetry` under the lock. HUD-specific logic is wrapped in `try/except` so a failure does not break the upstream logger's ground-truth callback.
+  * **Direct `activate_event()` for synchronous event injection:** `POST /api/events` calls `activate_event()` and `enqueue_priority()` directly rather than going through the `CLICommand` queue. This allows the 201 response to return the assigned `event_id` synchronously. The call is protected by `hud_state.lock` for thread safety on `EventState._next_id` increment.
+  * **`_clear_event_with_info` helper for DELETE:** `clear_event_by_id()` returns only `bool`, but the `on_event_cleared` callback needs `(event_id, animal_id, event_type)`. A local helper looks up the event metadata in `event_state.active` before clearing, returning `Optional[tuple[str, int, str]]`.
+  * **Per-animal history ring buffer:** `dict[int, collections.deque(maxlen=10_000)]` populated by the `on_tick_complete` callback. `GET /api/history?id=<id>&limit=<n>` reads from this buffer under the lock. The 10,000-entry cap bounds memory at ~2.8 hours of telemetry per animal.
+  * **6 REST endpoints (per AGENTS.md §7):** `GET /api/health` (uptime, sim_second, memory, queue depth), `GET /api/state` (full 20-cattle snapshot with pasture polygon, ambient weather, active events), `GET /api/history` (per-animal historical telemetry), `GET /api/queue` (scheduler snapshot with ThingSpeak quota), `POST /api/events` (inject live anomaly, returns 201 with event_id), `DELETE /api/events/<id>` (clear active event, returns 204). All JSON responses include `schema_version`, `run_id`, `sim_second`. Errors use the standard format: `{"code": "...", "message": "...", "details": {...}}`.
+  * **Static file serving with directory traversal protection:** Requests not matching `/api/*` are served from `src/herd_simulator/web/`. `/` maps to `index.html`. Path traversal is blocked by resolving the requested path and verifying it falls within the `web/` directory via `Path.resolve()`.
+  * **Leaflet 1.9.4 vendor bundle:** `leaflet.js`, `leaflet.css`, and marker images committed as static assets in `web/leaflet/`. No CDN dependency — consistent with the zero-dependency principle. OSM tiles are the only external network request (degrades gracefully offline to a grey map).
+  * **Dark-themed single-page HUD (`index.html`, `app.js`, `style.css`):** Leaflet map with circle markers colored by alert band (green/yellow/red, grey for dropout). Sidebar with environment panel, event list with clear buttons, event injection form, queue status, and a 20-row animal table. Client-side polling at `poll_interval_ms` (default 2000ms). Toast notifications for event injection/clearing feedback. Connection status indicator dot.
+* **Deferred (not addressed in this deliverable):**
+  * ID 1 behavior (physical collar parity) remains simulated — deferred per ADR-017.
+  * `src/main.py` CLI entry point remains deferred (ADR-017).
+* **Consequences:** 370 tests pass (308 existing + 62 new API server tests across 14 test classes). The API server is fully wired via `create_hud_state(sim, run_id)` + `HudServer(hud_state, cfg).start()` + `wire_api_server(sim, hud_state)` — callable from any entry point. Tests use port 0 (OS-assigned) to eliminate CI conflicts.

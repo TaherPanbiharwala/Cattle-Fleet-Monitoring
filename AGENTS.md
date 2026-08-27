@@ -180,11 +180,12 @@ IoT/
 │   │   │   ├── logger.py           # Buffered per-run logging: 8 output files + ground truth
 │   │   │   ├── replay.py           # Telemetry CSV reader + normalization for determinism
 │   │   │   ├── thingspeak.py       # Ch.2 POST writer, Ch.1 GET sniffer, quota & backoff
-│   │   │   └── api_server.py       # REST API & static HUD server (not yet built)
-│   │   └── web/                    # (not yet built)
-│   │       ├── index.html          # Leaflet.js live map & telemetry HUD
-│   │       ├── app.js
-│   │       └── style.css
+│   │   │   └── api_server.py       # REST API server + static HUD file serving + callback wiring
+│   │   └── web/
+│   │       ├── index.html          # Leaflet.js live map & telemetry HUD (dark theme)
+│   │       ├── app.js              # Client-side polling, map markers, event injection
+│   │       ├── style.css           # Dashboard layout & colour variables
+│   │       └── leaflet/            # Leaflet 1.9.4 vendor bundle (JS, CSS, marker images)
 │   └── main.py                     # CLI entry point (not yet built — see ADR-017)
 └── tests/
     ├── test_golden_vectors.py      # Golden vector parity tests (THI, Risk, Geo)
@@ -194,7 +195,8 @@ IoT/
     ├── test_scheduler.py           # 15s floor, starvation prevention, sweep checks
     ├── test_logger.py              # Per-run logging: buffered I/O, ground truth, determinism
     ├── test_replay.py              # Replay reader, normalization, end-to-end determinism
-    └── test_thingspeak.py          # ThingSpeak client, quota, backoff, sniffer, wiring
+    ├── test_thingspeak.py          # ThingSpeak client, quota, backoff, sniffer, wiring
+    └── test_api_server.py          # REST API endpoints, HUD state, wiring, static serving
 ```
 
 ---
