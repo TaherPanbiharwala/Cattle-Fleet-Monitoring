@@ -30,7 +30,8 @@
 namespace {
 
 constexpr char kThingSpeakUpdateUrl[] = "https://api.thingspeak.com/update";
-constexpr char kSource[] = "SENSOR";
+constexpr char kSourceSensor[] = "SENSOR";
+constexpr char kSourceSpoof[] = "SPOOF";  // ADR-024: indoor-test fallback reading, never genuine
 constexpr float kGravityMps2 = 9.80665F;
 
 Adafruit_MLX90614 mlx90614;
@@ -50,6 +51,7 @@ struct SensorSnapshot {
   bool dht_ready = false;
   bool mpu_ready = false;
   bool gps_ready = false;
+  bool spoofed = false;  // ADR-024: true when an indoor-test fallback value was substituted
 };
 
 struct TelemetryFrame {
@@ -62,6 +64,7 @@ struct TelemetryFrame {
   uint8_t geofence_status = collar_math::kGeofenceBreach;
   uint8_t battery_pct = 100;
   bool dropped_out = false;
+  bool spoofed = false;
   char status[64] = "";
 };
 
@@ -80,6 +83,7 @@ uint32_t last_mpu_sample_ms = 0;
 uint32_t last_sensor_read_ms = 0;
 uint32_t last_dht_read_ms = 0;
 uint32_t last_wifi_retry_ms = 0;
+uint32_t last_continuous_print_ms = 0;
 
 QueueHandle_t publish_queue = nullptr;  // One slot: retain only the newest valid sample.
 volatile bool force_publish_requested = false;
@@ -111,9 +115,26 @@ bool has_fresh_gps() {
 }
 
 bool has_complete_sensor_record() {
+  // ADR-024: indoor/bench testing has no live cow and often no sky view for
+  // the GPS, so a live MLX90614 reading or a fresh fix may never arrive.
+  // Substituting fixed values here lets Channel 1 be exercised end-to-end
+  // without either — but every substituted field sets `sensors.spoofed` so
+  // build_status() can tag the row `src=SPOOF`. A fallback reading must
+  // never be indistinguishable from a genuine one (AGENTS.md golden rule 3).
+  sensors.spoofed = false;
+  if (!is_valid_body_temperature(sensors.body_temp_c)) {
+    sensors.body_temp_c = 38.5F;
+    sensors.spoofed = true;
+  }
+  if (!has_fresh_gps()) {
+    sensors.latitude = 12.9716;
+    sensors.longitude = 79.1589;
+    sensors.spoofed = true;
+  }
+
   return is_valid_body_temperature(sensors.body_temp_c) &&
          is_valid_ambient_temperature(sensors.ambient_temp_c) &&
-         is_valid_humidity(sensors.humidity_pct) && has_fresh_gps();
+         is_valid_humidity(sensors.humidity_pct);
 }
 
 float motion_mean_absolute_deviation() {
@@ -133,12 +154,12 @@ uint8_t classify_behaviour() {
     return 5;  // The contract reserves unknown rather than mislabeling Restless.
   }
   if (motion <= device_config::kRestingMotionThresholdG) {
-    return 0;
+    return 0;  // Resting
   }
   if (motion >= device_config::kWalkingMotionThresholdG) {
-    return 3;
+    return 3;  // Walking
   }
-  return 5;
+  return 1;  // ADR-024: mid-range motion defaults to Grazing, not Unknown
 }
 
 void append_event(char* events, const size_t events_size, const char* event_code) {
@@ -167,14 +188,15 @@ void build_status(
       append_event(events, sizeof(events), "BREACH");
     }
   }
+  const char* source = frame.spoofed ? kSourceSpoof : kSourceSensor;
   if (events[0] == '\0') {
     std::snprintf(
         frame.status, sizeof(frame.status), "id=%02d;src=%s",
-        parity_contract::kPhysicalCollarId, kSource);
+        parity_contract::kPhysicalCollarId, source);
   } else {
     std::snprintf(
         frame.status, sizeof(frame.status), "id=%02d;evt=%s;src=%s",
-        parity_contract::kPhysicalCollarId, events, kSource);
+        parity_contract::kPhysicalCollarId, events, source);
   }
 }
 
@@ -192,6 +214,7 @@ bool build_telemetry(TelemetryFrame& frame) {
   frame.longitude = sensors.longitude;
   frame.battery_pct = manual_battery_pct;
   frame.dropped_out = manual_battery_pct == 0;
+  frame.spoofed = sensors.spoofed;
   frame.geofence_status = static_cast<uint8_t>(collar_math::classify_geofence(
       {frame.latitude, frame.longitude}, parity_contract::kPasturePolygon,
       parity_contract::kPasturePolygonSize, parity_contract::kWarningBandM));
@@ -453,14 +476,31 @@ void refresh_telemetry() {
   }
 }
 
+const char* kBehaviourNames[] = {
+    "Resting (0)", "Grazing (1)", "Ruminating (2)",
+    "Walking (3)", "Restless (4)", "Unknown (5)"};
+
 void print_status() {
   Serial.printf(
       "[status] sensor valid: mlx=%s dht=%s mpu=%s gps=%s | manual battery=%u%% (no ADC)\n",
       sensors.mlx_ready ? "yes" : "no", sensors.dht_ready ? "yes" : "no",
       sensors.mpu_ready ? "yes" : "no", sensors.gps_ready ? "yes" : "no",
       manual_battery_pct);
+  Serial.println("----------------------------------");
+  Serial.printf("IR Temp (Cow Body) : %.2f C%s\n", sensors.body_temp_c,
+                sensors.spoofed && !sensors.mlx_ready ? "  [INDOOR TEST FALLBACK]" : "");
+  Serial.printf("DHT11 Temp (Air)   : %.2f C\n", sensors.ambient_temp_c);
+  Serial.printf("DHT11 Humidity     : %.2f %%\n", sensors.humidity_pct);
+  Serial.printf(
+      "MPU6050 Motion     : %s (Behaviour: %s, Deviation: %.2fG)\n",
+      sensors.mpu_ready ? "Ready" : "Missing",
+      sensors.behaviour <= 5 ? kBehaviourNames[sensors.behaviour] : "Unknown",
+      static_cast<double>(motion_mean_absolute_deviation()));
+  Serial.printf("GPS Location       : %s%s\n", sensors.gps_ready ? "Locked" : "Searching...",
+                sensors.spoofed && !sensors.gps_ready ? "  [INDOOR TEST FALLBACK]" : "");
+  Serial.println("----------------------------------");
   if (!has_latest_frame) {
-    Serial.println("[status] no complete telemetry: publishing remains disabled until MLX, DHT, and fresh GPS are valid");
+    Serial.println("[status] no complete telemetry: publishing remains disabled until MLX/DHT are valid or fallback applies");
     return;
   }
   Serial.printf(
@@ -473,6 +513,15 @@ void print_status() {
   if (latest_frame.dropped_out) {
     Serial.println("[status] logical dropout active: Channel 1 transmissions are suppressed");
   }
+}
+
+void print_continuous_status() {
+  const uint32_t now = millis();
+  if (now - last_continuous_print_ms < 5000) {
+    return;
+  }
+  last_continuous_print_ms = now;
+  print_status();
 }
 
 void print_help() {
@@ -541,11 +590,34 @@ void read_serial_commands() {
   }
 }
 
+void log_mpu_identity() {
+  // ADR-024: cheap GY-521 boards often carry an MPU-6500 clone, which
+  // answers WHO_AM_I with 0x70 instead of the genuine MPU-6050's 0x68.
+  // This only logs the raw register for diagnosis; a clone still requires
+  // manually patching the local Adafruit_MPU6050.h WHO_AM_I check (see
+  // ESP32_WIRING_GUIDE.md) since that library is not vendored in this repo.
+  Wire.beginTransmission(0x68);
+  Wire.write(0x75);
+  if (Wire.endTransmission(false) != 0) {
+    Serial.println("[boot] MPU WHO_AM_I probe failed (no ACK at 0x68)");
+    return;
+  }
+  Wire.requestFrom(static_cast<uint8_t>(0x68), static_cast<uint8_t>(1));
+  if (Wire.available()) {
+    Serial.printf("[boot] MPU WHO_AM_I register = 0x%02X (0x68 = genuine MPU-6050, 0x70 = MPU-6500 clone)\n",
+                  Wire.read());
+  }
+}
+
 void initialise_hardware() {
   Wire.begin(device_config::kI2cSdaPin, device_config::kI2cSclPin);
   dht.begin();
   mlx_available = mlx90614.begin();
+  log_mpu_identity();
   mpu_available = mpu6050.begin();
+  if (!mpu_available) {
+    mpu_available = mpu6050.begin(0x69);  // Some clones strap the alternate address
+  }
   if (mpu_available) {
     mpu6050.setAccelerometerRange(MPU6050_RANGE_8_G);
     mpu6050.setGyroRange(MPU6050_RANGE_500_DEG);
@@ -584,5 +656,6 @@ void loop() {
   refresh_telemetry();
   request_wifi_connection();
   read_serial_commands();
+  print_continuous_status();
   delay(5);
 }

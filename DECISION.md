@@ -1,6 +1,6 @@
 # Architecture Decision Record (ADR) & Project Decision Log
 **Intelligent Cattle Fleet Management Platform**
-*Last Updated: 2026-08-27 · Status: Active / Approved*
+*Last Updated: 2026-08-28 · Status: Active / Approved*
 
 ---
 
@@ -35,6 +35,7 @@ This document preserves the complete historical and technical rationale for all 
 - [ADR-021: CLI Entry Point & MVP Finalization (Deliverable #7)](#adr-021-cli-entry-point--mvp-finalization-deliverable-7)
 - [ADR-022: Post-Ship Live Boundary Hardening (Deliverables #4–#7 Follow-up)](#adr-022-post-ship-live-boundary-hardening-deliverables-4-7-follow-up)
 - [ADR-023: Physical Collar Parity Firmware (Deliverable #8)](#adr-023-physical-collar-parity-firmware-deliverable-8)
+- [ADR-024: Field Hardware Corrections & Indoor Test Fallback (Deliverable #8 Follow-up)](#adr-024-field-hardware-corrections--indoor-test-fallback-deliverable-8-follow-up)
 
 ---
 
@@ -383,3 +384,20 @@ This document preserves the complete historical and technical rationale for all 
   * **Transport and secrets:** Channel 1 posts at 30 seconds normally and 15 seconds when critical/breached; the background worker applies the 15-second wall-clock floor before every retry and keeps only the latest valid telemetry. `WIFI_SSID`, `WIFI_PASSWORD`, and `THINGSPEAK_CHANNEL_1_WRITE_API_KEY` are loaded from an untracked root `.env` or explicit build environment variables and never logged. `requirements.txt` supplies PyYAML, pytest, and PlatformIO for a reproducible laptop setup.
 * **Deferred:** Deliverable 9 remains responsible for raw 10 Hz IMU streaming to the laptop, packet-gap logging, and any trained behaviour model. The classroom firmware currently accepts the ESP32 TLS certificate chain without pinning; pin a current ThingSpeak CA certificate before any production deployment.
 * **Consequences:** A physical Collar 1 can now replace the simulator's stale placeholder once a complete Channel 1 row is received, while P1 remains runnable independently. The firmware compiles for `esp32dev`, native C++ parity tests cover THI/risk/geofence/alert vectors, and the Python Channel 1 regression suite accepts `src=SENSOR` rows with the manual `field8` value.
+
+---
+
+## ADR-024: Field Hardware Corrections & Indoor Test Fallback (Deliverable #8 Follow-up)
+
+* **Status:** Approved
+* **Date:** 2026-08-28
+* **Supersedes:** ADR-023's `DATA=GPIO4` DHT11 pin assignment, its motion-classification thresholds and mid-range fallback code, and its assumption of a genuine MPU-6050 chip. Does **not** supersede AGENTS.md golden rule 3's anti-fabrication requirement — the indoor test fallback below is a narrowly-scoped, distinctly-labeled exception to it, not a repeal.
+* **Context:** Bringing up Deliverable 8 on the actual purchased hardware surfaced three issues ADR-023 did not anticipate: (1) the supplied GY-521 breakout is an MPU-6500 clone, not a genuine MPU-6050 — it answers `WHO_AM_I` with `0x70` instead of `0x68`, and its factory-uncalibrated accelerometer offsets exceed 0.20 g at rest, well past the original resting/walking thresholds; (2) `GPIO4` proved dead on this specific ESP32 dev board; (3) requiring a live GPS fix and a live MLX90614 reading before any Channel 1 row publishes made it impossible to exercise the ThingSpeak pipeline indoors during development, before a cow or open sky was available.
+* **Decision:**
+  * **MPU-6500 clone compatibility:** `initialise_hardware()` now reads the `WHO_AM_I` register (0x75) directly over I²C at boot and logs the raw value, so a clone chip is diagnosed from the serial monitor instead of silently misbehaving. `mpu6050.begin()` also retries at the alternate address `0x69` if `0x68` fails. A board that reports `0x70` additionally requires manually patching the developer's local PlatformIO-managed `Adafruit_MPU6050.h` to accept that device ID — a local library-cache edit documented in `ESP32_WIRING_GUIDE.md`, not a change this repository can carry, since the library isn't vendored.
+  * **Motion thresholds recalibrated:** `kRestingMotionThresholdG` raised from `0.05` to `0.25` and `kWalkingMotionThresholdG` from `0.15` to `0.50` in `device_config.h`, to absorb the clone sensor's factory offset instead of misreading a stationary cow as constantly walking.
+  * **Mid-range behaviour fallback changed from Unknown to Grazing:** `classify_behaviour()`'s mid-range case (motion between the resting and walking thresholds, once a full 5-second window exists) now returns Grazing (`1`) instead of Other/Unknown (`5`), so ordinary in-range motion isn't spuriously flagged low-confidence. Unknown (`5`) is still returned whenever a full motion window hasn't been collected yet. This does not touch AGENTS.md golden rule 6 — mapping to Restless (`4`) remains forbidden in both cases.
+  * **DHT11 migrated to GPIO15:** `GPIO4` is dead on the reference board; `kDhtPin` is now `15`. `ESP32_WIRING_GUIDE.md` and `README.md` are updated to match; `GPIO4` is no longer part of the pin map.
+  * **Indoor test fallback for MLX90614 and GPS — narrowly-scoped exception to golden rule 3:** `has_complete_sensor_record()` substitutes a fixed `38.5°C` body temperature when the MLX90614 reading is out of physiological range, and a fixed pasture coordinate (`12.9716, 79.1589`) when there is no fresh GPS fix, so Channel 1 can be exercised end-to-end without a live cow or open sky during development. This is needed and is not being deferred. However, every row built from a substituted value sets `TelemetryFrame.spoofed = true`, which `build_status()` surfaces as `src=SPOOF` in place of `src=SENSOR` — a fallback row is never posted with a status string indistinguishable from a genuine one. The serial `status` output and the new continuous print (below) likewise tag a substituted reading `[INDOOR TEST FALLBACK]`. This exception applies only to the physical-collar firmware's own local fallback; it does not touch the P1 simulator, and it does not weaken the dropout/staleness rule from ADR-017 or the ID-1-never-simulated boundary from ADR-022 — both still hold for a `src=SPOOF` row exactly as for a missing one.
+  * **Continuous serial diagnostics:** the serial monitor now prints a full sensor-reading block (raw body/ambient temperature, humidity, motion deviation, GPS lock state, battery, with `[INDOOR TEST FALLBACK]` markers where relevant) every 5 seconds, independent of the ThingSpeak publish cadence, in addition to the existing `status` command's compact validity line.
+* **Consequences:** Deliverable 8 now runs on the actual supplied hardware (MPU-6500 clone, dead GPIO4) and can be exercised indoors during development. `src=SPOOF` is a new, permanent value the Channel 1 `status` field may carry. Nothing on the Python side parses or validates `src` today (the sniffer only reads GPS fields for herd anchoring), so this required no simulator changes — but any future consumer of Channel 1's `status` field (dashboards, Deliverable 9+ tooling) must treat `SPOOF` as non-genuine telemetry, not a sensor fault, and must not average or train on it alongside genuine `SENSOR` rows.

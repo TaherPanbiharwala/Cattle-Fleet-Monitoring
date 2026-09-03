@@ -70,6 +70,7 @@ The platform is designed around the reality that only **one physical collar (ESP
 3. **No Solar Recharge:**
    Collar hardware has no solar panels. Battery level (0–100%) must only deplete based on activity drain ($1\times$ base, $3\times$ during breach/alert bursts). When battery hits 0%, collar triggers dropout. Dropout telemetry must report as **stale and critical** (`risk_score=100`, red band) — never a fabricated healthy score just because no fresh data exists (see ADR-017; this was violated once already and fixed).
    **Deliverable 8 exception:** the USB-powered physical prototype has no battery ADC. Its required `field8` is a laptop-controlled demonstration value set with the serial `battery <0..100>` command; it is never presented as a measured voltage. `battery 0` is a logical dropout that discards queued writes and suppresses Channel 1 transmission until a non-zero value is set. This exception does not alter the P1 simulator's activity-aware depletion model.
+   **Deliverable 8 indoor-test exception (ADR-024):** when the physical collar has no live MLX90614 reading or GPS fix (e.g. bench/classroom testing), it may substitute a fixed healthy body temperature and a fixed pasture coordinate so Channel 1 can still be exercised end-to-end. Every substituted row **must** post `src=SPOOF` instead of `src=SENSOR` — a fallback reading must never be indistinguishable from a genuine one. This exception is scoped to the physical-collar firmware only; it does not apply to the P1 simulator or to dropout telemetry, and it does not weaken the staleness rule below.
    Reserved physical identity **ID 1 is never simulated**. Until a complete, fresh Channel 1 row arrives, expose it locally as stale and critical (`risk_score=100`, red/grey presentation). A GPS-only Channel 1 fix may anchor herd movement, but does not make ID 1 telemetry fresh; once a complete row arrives, use its actual values.
 4. **Strict Mathematical Determinism:**
    Given the same configuration, scenario, and random seed (default `42`), the simulation must produce byte-identical normalized telemetry across runs.
@@ -100,7 +101,7 @@ The platform is designed around the reality that only **one physical collar (ESP
 | `field6` | Composite Risk Score | int | `0` to `100` |
 | `field7` | Geofence Status | int | `0` Inside, `1` 10m Warning Zone, `2` Breach |
 | `field8` | Battery Level | int | `0` to `100` (%); Deliverable 8 USB demo uses an explicit manual value, not an ADC measurement |
-| `status` | Identity & Events | text | Semicolon-delimited: `id=XX;evt=YY;src=ZZ` (e.g. `id=07;evt=FEVER;src=RULE`) |
+| `status` | Identity & Events | text | Semicolon-delimited: `id=XX;evt=YY;src=ZZ` (e.g. `id=07;evt=FEVER;src=RULE`). `src` is `RULE` for the P1 simulator, `SENSOR` for a genuine Deliverable 8 physical reading, or `SPOOF` for a Deliverable 8 indoor-test fallback reading (ADR-024) — never treat `SPOOF` as genuine sensor data. |
 
 ### 4.2 Mathematical Formulas
 

@@ -7,7 +7,7 @@ namespace device_config {
 
 constexpr int kI2cSdaPin = 21;
 constexpr int kI2cSclPin = 22;
-constexpr int kDhtPin = 4;
+constexpr int kDhtPin = 15;  // ADR-024: GPIO4 is dead on the reference board
 constexpr int kGpsRxPin = 16;  // ESP32 RX <- NEO-6M TX
 constexpr int kGpsTxPin = 17;  // ESP32 TX -> NEO-6M RX (optional)
 
@@ -27,8 +27,8 @@ constexpr uint32_t kRetryMaxDelayMs = 16000;
 constexpr uint8_t kMaxRetryAttempts = 4;
 
 constexpr uint8_t kMotionWindowSamples = 50;  // 5 seconds at 10 Hz
-constexpr float kRestingMotionThresholdG = 0.05F;
-constexpr float kWalkingMotionThresholdG = 0.15F;
+constexpr float kRestingMotionThresholdG = 0.25F;  // ADR-024: recalibrated for MPU-6500 clone offset
+constexpr float kWalkingMotionThresholdG = 0.50F;
 
 constexpr float kBodyTempMinC = 35.0F;
 constexpr float kBodyTempMaxC = 43.0F;

@@ -17,7 +17,7 @@ sequence, see [ESP32 Wiring Guide](ESP32_WIRING_GUIDE.md).
 |---|---|---|
 | MLX90614 | I²C SDA GPIO21, SCL GPIO22 | Share the I²C bus with MPU6050. |
 | MPU6050 | I²C SDA GPIO21, SCL GPIO22 | Used for local 10 Hz motion sampling. |
-| DHT11 | DATA GPIO4 | Use the breakout module's pull-up, or add the module-recommended pull-up resistor. |
+| DHT11 | DATA GPIO15 | Use the breakout module's pull-up, or add the module-recommended pull-up resistor. `GPIO4` was the original pin but is dead on some ESP32 boards (ADR-024). |
 | NEO-6M | GPS TX → GPIO16, GPS RX ← GPIO17 | The RX connection is optional unless the module is configured. |
 
 Connect all grounds. Power each breakout board at the voltage specified by its
@@ -90,8 +90,18 @@ field4=latitude; field5=longitude; field6=predicted-risk-score;
 field7=geofence; field8=manual-battery; status=id=01;...;src=SENSOR
 ```
 
-The local motion classifier returns only Resting (`0`), Walking (`3`), or
-Other/Unknown (`5`); it never treats uncertain data as Restless (`4`). Its
+**Indoor test fallback (ADR-024):** without a live MLX90614 reading or a
+fresh GPS fix, the firmware substitutes a fixed healthy body temperature and
+a fixed pasture coordinate so Channel 1 can still be exercised end-to-end
+during development. A row built this way always posts `src=SPOOF` in place of
+`src=SENSOR` and is flagged `[INDOOR TEST FALLBACK]` on the serial monitor —
+it is never indistinguishable from a genuine sensor reading. Treat a feed
+full of `src=SPOOF` rows as "the pipeline works," not as validated field data.
+
+The local motion classifier returns Resting (`0`), Grazing (`1`, for
+mid-range motion that isn't clearly resting or walking — ADR-024), Walking
+(`3`), or Other/Unknown (`5`, only when a full 5-second motion window hasn't
+been collected yet); it never treats uncertain data as Restless (`4`). Its
 thresholds are intentionally provisional until Deliverables 9 and 10 provide
 the raw-IMU collection and evaluated model pipeline.
 
@@ -118,3 +128,8 @@ make Collar 1 telemetry fresh.
    normal operation returns.
 5. With the simulator in live HUD mode, confirm ID 1 moves from grey/stale to
    a fresh physical marker after the first complete Channel 1 row.
+6. Check the boot log's MPU `WHO_AM_I` value. `0x70` means an MPU-6500 clone —
+   see the wiring guide's MPU-6500 note before trusting motion data.
+7. Before treating any test run as validated field data, confirm the `status`
+   field says `src=SENSOR`, not `src=SPOOF` — the latter means one or more
+   readings were the ADR-024 indoor fallback, not a live sensor.
