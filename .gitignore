@@ -43,6 +43,14 @@ htmlcov/
 logs/
 *.log
 
+# Phase 3 public-data and experiment outputs. Raw cow data is attached to
+# Kaggle as a private input dataset and must never be committed here.
+data/
+artifacts/
+ml_artifacts/
+wandb/
+notebooks/.ipynb_checkpoints/
+
 # OS & IDE
 .DS_Store
 .vscode/

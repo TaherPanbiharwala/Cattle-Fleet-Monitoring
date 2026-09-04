@@ -1,0 +1,6 @@
+# Optional Phase 3 public-dataset benchmark dependencies.
+# Phase 1 remains runnable with requirements.txt alone.
+numpy>=1.26
+scikit-learn>=1.5
+torch>=2.3
+wandb>=0.22.3
