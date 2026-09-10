@@ -10,7 +10,7 @@
 
 This repo is building a system that detects when a dairy cow's behavior/physiology has shifted from her own normal, and explains that shift in plain language. It's split into two independent halves:
 
-- **Stage 1 (this is you)** — classical ML, no LLM anywhere. Two parts: (a) a behavior classifier trained on public IMU data — **your task** — and (b) a per-cow statistical baseline over a different dataset (someone else's task, not yours, don't worry about it). Together they produce a structured record saying "this cow's behavior/physiology looks different, and here's specifically what changed."
+- **Stage 1 (this is you)** — classical ML, no LLM anywhere. Two parts: (a) a behavior classifier trained on public IMU data — **your task** — and (b) a per-cow statistical baseline (SPC/CUSUM) over a different dataset, MmCows — someone else's task, not yours, don't worry about it; see [`STAGE1_ANOMALY_BASELINE_HANDOFF.md`](STAGE1_ANOMALY_BASELINE_HANDOFF.md) if you're curious what that half involves. Together they produce a structured record saying "this cow's behavior/physiology looks different, and here's specifically what changed."
 - **Stage 2 (already built)** — an LLM layer that takes Stage 1's output and explains it in cited, farmer-readable language, with a hard-grounded fallback so it never invents facts. This is done and tested (against fake/mocked Stage 1 data) — you don't need to touch it, and you don't need to understand it deeply. It's just the reason your output needs to match a specific shape (Section 4 below).
 
 The full spec is [`LLM_Diagnostic_Assistant_PRD.md`](LLM_Diagnostic_Assistant_PRD.md) and the living project tracker is [`LLM_ASSISTANT_STATUS.md`](LLM_ASSISTANT_STATUS.md). You don't need to read either cover to cover — pointers below tell you exactly which sections matter for your part.
@@ -50,7 +50,7 @@ These three fields are part of a frozen, already-built pydantic schema — see [
 This repo has a lot else going on that's unrelated to your task:
 - `src/herd_simulator/` and `src/collar_gateway/` — a separate cattle-fleet digital-twin simulator and physical-collar firmware. Ignore completely.
 - `cattle-anomaly-assistant/stage2_rag_assistant/` — the already-built LLM/RAG explanation layer (KB, pipeline, fallback logic). Already done and tested against fake data; not your concern.
-- The `MmCows` dataset / SPC-CUSUM baseline work (a different Stage 1 sub-task, "M1b" in the tracker) — someone else's job, not yours.
+- The `MmCows` dataset / SPC-CUSUM baseline work (a different Stage 1 sub-task, "M1b"/"M1c" in the tracker — see [`STAGE1_ANOMALY_BASELINE_HANDOFF.md`](STAGE1_ANOMALY_BASELINE_HANDOFF.md)) — someone else's job, not yours.
 
 Stay inside `cattle-anomaly-assistant/stage1_anomaly_detection/`.
 
