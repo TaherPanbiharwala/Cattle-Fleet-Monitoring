@@ -13,6 +13,9 @@ dev = [
     "pytest>=8.0",
 ]
 
+[project.scripts]
+baseline-spc-cusum = "stage1_anomaly_detection.baseline_spc_cusum.cli:main"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
