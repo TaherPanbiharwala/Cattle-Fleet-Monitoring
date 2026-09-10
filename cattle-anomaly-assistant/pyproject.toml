@@ -6,13 +6,16 @@ requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.5",
     "pyyaml>=6.0",
+    "ragas==0.4.3",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pytest-asyncio>=1.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+asyncio_mode = "auto"

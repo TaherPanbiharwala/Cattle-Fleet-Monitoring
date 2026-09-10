@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from stage2_rag_assistant.eval.ragas_embeddings import FakeRagasEmbedding
+from stage2_rag_assistant.eval.ragas_llm import FakeRagasLLM
 from stage2_rag_assistant.kb.build_kb import DEFAULT_SCHEMA_PATH, DEFAULT_SEED_PATH, build_kb
 from stage2_rag_assistant.llm.providers.fake_provider import FakeLLMClient
 
@@ -21,5 +23,21 @@ def tmp_kb_db(tmp_path: Path) -> Path:
 def fake_llm_client():
     def _make(responses: list[str] | None = None, responder=None) -> FakeLLMClient:
         return FakeLLMClient(responses=responses, responder=responder)
+
+    return _make
+
+
+@pytest.fixture
+def fake_ragas_llm():
+    def _make(responses: list | None = None, responder=None) -> FakeRagasLLM:
+        return FakeRagasLLM(responses=responses, responder=responder)
+
+    return _make
+
+
+@pytest.fixture
+def fake_ragas_embedding():
+    def _make() -> FakeRagasEmbedding:
+        return FakeRagasEmbedding()
 
     return _make

@@ -55,6 +55,12 @@ notebooks/.ipynb_checkpoints/
 # seed_data/*.yaml by build_kb.py; the YAML is the source of truth, not this.
 *.sqlite3
 
+# cattle-anomaly-assistant/stage2_rag_assistant/eval/reports — run_eval.py
+# output, regenerated per run; the golden/*.jsonl fixtures are the source
+# of truth, not this.
+stage2_rag_assistant/eval/reports/*
+!stage2_rag_assistant/eval/reports/.gitkeep
+
 # OS & IDE
 .DS_Store
 .vscode/

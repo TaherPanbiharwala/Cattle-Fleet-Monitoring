@@ -1,0 +1,11 @@
+# Layer 2 (Ragas) judge configuration. Deliberately separate from
+# stage2_rag_assistant/config/default.yaml — PRD Section 11 says "use a judge
+# LLM call separate from Stage 4's generation call," and a separate config
+# file makes that a structural fact, not just a runtime detail.
+judge_llm:
+  provider: fake  # anthropic | openai | google | fake — same deferred-provider policy as config/default.yaml
+  model: fake-judge-model
+
+judge_embedding:
+  provider: fake  # only AnswerRelevancy needs this
+  model: fake-embedding-model
