@@ -1,11 +1,5 @@
 """CLI + importable run() for the Layer 2 (Ragas) eval harness.
 See LLM_Diagnostic_Assistant_PRD.md Section 11.
-
-real_cases.jsonl / injected_cases.jsonl (PRD Section 13's proposed tree)
-are deliberately not created — they need real Stage 1 output that doesn't
-exist yet (PRD Section 14's Integration Point). Pointing this at a
-nonexistent file fails loudly rather than silently reporting "0 cases" as
-if that were a legitimate result.
 """
 
 from __future__ import annotations
@@ -19,17 +13,16 @@ from pathlib import Path
 from stage2_rag_assistant.eval import _ragas_compat  # noqa: F401  (import for its side effect, before ragas)
 from ragas.metrics.collections import AnswerRelevancy, ContextPrecision, ContextRecall, Faithfulness
 
-from shared.schemas import AnomalyExplanationQuery, GoldenCase
 from stage2_rag_assistant.config.settings import Stage2Config, load_config
 from stage2_rag_assistant.eval.eval_config import EvalConfig, load_eval_config
 from stage2_rag_assistant.eval.metrics import CaseScore, aggregate, score_case
 from stage2_rag_assistant.eval.ragas_embeddings import build_ragas_embedding
 from stage2_rag_assistant.eval.ragas_llm import build_ragas_llm
+from stage2_rag_assistant.golden_loading import DEFAULT_GOLDEN_FILES, load_cases, query_for
 from stage2_rag_assistant.llm.client import build_llm_client
 from stage2_rag_assistant.pipeline.orchestrator import run_pipeline
 
 _HERE = Path(__file__).parent
-DEFAULT_GOLDEN_FILES = [_HERE / "golden" / "mock_derived_cases.jsonl", _HERE / "golden" / "adversarial_cases.jsonl"]
 DEFAULT_REPORTS_DIR = _HERE / "reports"
 
 _LAYER2_HEADER = (
@@ -38,32 +31,6 @@ _LAYER2_HEADER = (
     "the G4 ablation, hallucination/calibration) is separate, later scope (PRD Section 11, Section 14 "
     "'Final phase'). Nothing in this report is a detection-accuracy result."
 )
-
-
-def _load_cases(paths: list[Path]) -> list[GoldenCase]:
-    cases: list[GoldenCase] = []
-    for path in paths:
-        if not path.exists():
-            raise FileNotFoundError(
-                f"{path} does not exist. real_cases.jsonl/injected_cases.jsonl need real Stage 1 output "
-                "(PRD Section 14 Integration Point) and are deliberately not created yet — see "
-                "LLM_ASSISTANT_STATUS.md's M2b section before assuming this is a bug."
-            )
-        with path.open() as f:
-            cases.extend(GoldenCase.model_validate_json(line) for line in f if line.strip())
-    return cases
-
-
-def _query_for(case: GoldenCase) -> AnomalyExplanationQuery | None:
-    if case.query_text is None:
-        return None
-    return AnomalyExplanationQuery(
-        query_id=f"eval-{case.case_id}",
-        cow_id=case.input_record.cow_id,
-        raw_text=case.query_text,
-        submitted_by="vet",
-        timestamp=datetime.now(timezone.utc),
-    )
 
 
 async def run(
@@ -89,7 +56,7 @@ async def run(
     pipeline_config = pipeline_config or load_config()
     eval_config = eval_config or load_eval_config()
 
-    cases = _load_cases(golden_files)
+    cases = load_cases(golden_files)
     llm_client = build_llm_client(pipeline_config.llm)
 
     judge_llm = build_ragas_llm(eval_config.judge_llm)
@@ -104,7 +71,7 @@ async def run(
     excluded_by_path: dict[str, int] = {}
 
     for case in cases:
-        response = run_pipeline(case.input_record, _query_for(case), config=pipeline_config, llm_client=llm_client)
+        response = run_pipeline(case.input_record, query_for(case), config=pipeline_config, llm_client=llm_client)
 
         if response.path_taken != "llm_grounded":
             # Fallback responses' rationale is a hardcoded template, never LLM

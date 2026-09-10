@@ -13,9 +13,10 @@ This is a self-contained subproject inside the larger `IoT` repo — its own `py
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt   # includes ragas — real weight (numpy/pandas/langchain-core/instructor)
-.venv/bin/python -m pytest tests/ -v        # 92/92, all against fake LLM/judge clients, zero API keys
+.venv/bin/python -m pytest tests/ -v        # 132/132, all against fake LLM/judge clients, zero API keys
 .venv/bin/python -m stage2_rag_assistant.kb.build_kb --overwrite   # build the local KB (gitignored, not needed for tests)
 .venv/bin/python -m stage2_rag_assistant.eval.run_eval             # run the Layer 2 eval, writes a report under eval/reports/
+.venv/bin/python -m stage2_rag_assistant.calibration.tune_threshold   # prototype tau bucketing, writes a report under calibration/reports/
 ```
 
 If anything importing `ragas` fails on a fresh install, read [`stage2_rag_assistant/eval/_ragas_compat.py`](stage2_rag_assistant/eval/_ragas_compat.py)'s docstring first — it's a documented upstream packaging bug, not a setup mistake.
@@ -29,4 +30,6 @@ If anything importing `ragas` fails on a fresh install, read [`stage2_rag_assist
 - `stage2_rag_assistant/kb/` — the SQLite knowledge base: `schema.sql`, an editable `seed_data/shift_categories.yaml` (the actual source of truth — edit this, not the built DB), and `build_kb.py`. The built `kb.sqlite3` is gitignored.
 - `stage2_rag_assistant/pipeline/` — the 5 pipeline stages (`record_assembler`, `intent_router`, `retriever`, `generator`, `fallback_gate`) plus `response_builder`/`audit_log`, wired end to end by `orchestrator.run_pipeline()`.
 - `stage2_rag_assistant/eval/` — the Layer 2 (Ragas) eval harness: a fake judge LLM/embedding (`ragas_llm.py`/`ragas_embeddings.py`, same deferred-provider policy as `llm/`), field mapping + scoring (`metrics.py`), a 24-case golden set under `golden/` (17 mock-derived + 7 hand-written adversarial — `real_cases.jsonl`/`injected_cases.jsonl` need real Stage 1 output and are deliberately not created yet), and `run_eval.py`. Read `_ragas_compat.py` before touching anything that imports `ragas` directly.
-- `stage1_anomaly_detection/`, `stage2_rag_assistant/{calibration,api}/` — not created yet; see `LLM_ASSISTANT_STATUS.md` for what's next.
+- `stage2_rag_assistant/golden_loading.py` — shared golden-set loading (`load_cases`/`query_for`), used by both `eval/` and `calibration/` — lives here rather than nested under either since both depend on it equally.
+- `stage2_rag_assistant/calibration/` — the τ-calibration prototype (PRD Section 10 steps 1-3 only): a deterministic calibration/test split of the golden set, confidence bucketing, and the LLM's own per-bucket empirical accuracy (`bucketing.py`), run via `tune_threshold.py`. Never writes to `config/default.yaml`'s real `tau` — steps 4-6 need real Stage 1 output (Integration Point), not this milestone.
+- `stage1_anomaly_detection/`, `stage2_rag_assistant/api/` — not created yet; see `LLM_ASSISTANT_STATUS.md` for what's next.

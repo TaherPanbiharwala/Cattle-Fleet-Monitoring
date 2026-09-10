@@ -55,11 +55,21 @@ notebooks/.ipynb_checkpoints/
 # seed_data/*.yaml by build_kb.py; the YAML is the source of truth, not this.
 *.sqlite3
 
-# cattle-anomaly-assistant/stage2_rag_assistant/eval/reports — run_eval.py
-# output, regenerated per run; the golden/*.jsonl fixtures are the source
-# of truth, not this.
-stage2_rag_assistant/eval/reports/*
-!stage2_rag_assistant/eval/reports/.gitkeep
+# cattle-anomaly-assistant/stage2_rag_assistant/{eval,calibration}/reports —
+# run_eval.py / tune_threshold.py output, regenerated per run; the
+# golden/*.jsonl fixtures are the source of truth, not these.
+#
+# NOTE: these patterns must include the full cattle-anomaly-assistant/ prefix.
+# A slashed gitignore pattern is anchored to this .gitignore file's own
+# directory (repo root) — a bare `stage2_rag_assistant/eval/reports/*` (as
+# this used to read) does NOT match `cattle-anomaly-assistant/stage2_rag_assistant/
+# eval/reports/*`, and silently ignored nothing (confirmed via
+# `git check-ignore -v`, exit code 1 — no match). *.sqlite3 above works
+# without a prefix only because it has no slash, so it matches at any depth.
+cattle-anomaly-assistant/stage2_rag_assistant/eval/reports/*
+!cattle-anomaly-assistant/stage2_rag_assistant/eval/reports/.gitkeep
+cattle-anomaly-assistant/stage2_rag_assistant/calibration/reports/*
+!cattle-anomaly-assistant/stage2_rag_assistant/calibration/reports/.gitkeep
 
 # OS & IDE
 .DS_Store

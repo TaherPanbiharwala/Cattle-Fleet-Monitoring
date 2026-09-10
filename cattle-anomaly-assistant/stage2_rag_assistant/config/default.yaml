@@ -14,8 +14,10 @@ generation:
   max_retries: 1  # FR-9: one retry on malformed output, then fallback_insufficient_data
 
 fallback:
-  # PLACEHOLDER — NOT CALIBRATED. PRD Section 10 steps 4-6 need real Stage 1 output
-  # to calibrate tau properly; that's milestone M2c, not this one.
+  # PLACEHOLDER — NOT CALIBRATED. M2c prototyped the bucketing mechanism (PRD
+  # Section 10 steps 1-3) against mock data — see calibration/tune_threshold.py.
+  # Steps 4-6 (the real tau) still need real Stage 1 output — Integration
+  # Point milestone, not M2c.
   tau: 0.6
   high_severity_margin: 0.3
 
