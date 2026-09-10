@@ -1,0 +1,164 @@
+# LLM Diagnostic Assistant — Shared Context, Milestones & Progress
+
+**Last updated:** 2026-09-10
+**Source PRD:** [LLM_Diagnostic_Assistant_PRD.md](LLM_Diagnostic_Assistant_PRD.md) — frozen spec. Don't edit it without flagging the change to MTZ; this file tracks status *against* it.
+**Purpose of this file:** MTZ is going to run Codex, Claude Code, and Antigravity against this same repo, in no particular order, possibly in different worktrees. None of those tools share memory with each other. This file is the thing that does — paste it, read it, update it.
+
+---
+
+## 1. Paste this block to onboard a fresh session
+
+> You're working in the "Intelligent Cattle Fleet Management Platform" repo — an ESP32 cattle-collar IoT project with a Python digital-twin simulator. It is **not** an empty repo. It already has: a complete Phase 1 herd simulator (411 tests as of `DECISION.md` ADR-022 — two Phase-3 test files landed after that count and aren't reflected in it), working physical-collar firmware (ADR-023/024), and a just-added, not-yet-run Phase 3 behavior-classification benchmark on the public WASP-lab/`db-cow-walking` dataset (`src/ml/`, `src/dataset_adapters/wasp_lab.py`, `PHASE3_BENCHMARK.md`).
+>
+> We are now building a new component specified in full in `LLM_Diagnostic_Assistant_PRD.md`: a two-stage system — **Stage 1** (classical ML: a behavior classifier plus a per-cow SPC/CUSUM baseline over `MmCows` data) producing a structured `AnomalyRecord`, and **Stage 2** (a hard-grounded RAG+LLM layer with a calibrated fallback gate) that explains what Stage 1 detected in cited, farmer-readable language. No disease diagnosis anywhere in this system — anomaly detection only.
+>
+> This new work replaces this repo's own **Phase 4** (personal deviation) and **Phase 5** (fever/lameness research) from `Cattle_Fleet_Management_Master_PRD.md`. **MTZ confirmed on 2026-09-10 that this is a deliberate pivot, not something to reconcile**: wherever `LLM_Diagnostic_Assistant_PRD.md` conflicts with the old Master PRD's P4/P5 design, the new PRD wins outright — see Section 2 below for exactly what that overrides, so you don't accidentally resurrect the old formula or gate.
+>
+> Read, in this order: this file in full → `LLM_Diagnostic_Assistant_PRD.md` in full → `AGENTS.md`'s golden rules (§3 — they still bind: no diagnosis claims, cow-grouped cross-validation only, never map Miscellaneous behavior to Restless, secrets via env only) → skim `DECISION.md`'s ADR index for anything touching what you're about to change.
+>
+> **Milestones M0 and M2a are both done** (2026-09-10): M0 is the schema contract + mock generator (`shared/schemas/`, all models inheriting a `StrictModel` base with `extra="forbid"` and `AwareDatetime` timestamps — see the 2026-09-10 `/review` entry in §8 for why). M2a is the full Stage 2 pipeline — a SQLite KB (`kb/`), an LLM client abstraction currently backed only by a deterministic `FakeLLMClient` (`llm/`, real provider deferred by MTZ's own choice, see §4 Q2), and all 5 pipeline stages wired end to end (`pipeline/`, entry point `pipeline/orchestrator.run_pipeline()`). Both live in a new self-contained subproject, [`cattle-anomaly-assistant/`](cattle-anomaly-assistant/), with its own `pyproject.toml`/`requirements.txt`/`.venv`/`tests/`, and neither imports from `../src/` — code reused from the existing WASP-lab work would be copied in, not cross-imported (see `cattle-anomaly-assistant/README.md`). Read what's there before writing more of it; 53/53 tests pass (`cd cattle-anomaly-assistant && .venv/bin/python -m pytest tests/ -v`).
+>
+> Do not silently resolve anything marked **[OPEN QUESTION]** in the PRD or in §4 below — surface it instead. When you finish a chunk of work, tick its checkbox in §5 and append a dated entry to the Progress Log in §8 — don't leave it implicit in a commit message, since the other two tools can only see this file, not your shell history.
+
+---
+
+## 2. How this fits the existing platform (read before assuming anything is greenfield)
+
+The PRD you were handed says "nothing has been implemented yet... greenfield build." That's true for Stage 2 (the RAG/LLM half). It is **not** true project-wide: this repo already has a mature 5-phase platform (`AGENTS.md`, `DECISION.md`, `Cattle_Fleet_Management_Master_PRD.md`), and the new PRD's Stage 1 overlaps two of those phases directly, not by coincidence — same datasets, adjacent authors, same student project.
+
+| Existing platform phase | New PRD equivalent | Relationship |
+|---|---|---|
+| **P3** — WASP-lab/`db-cow-walking` behavior classification (scaffolded 2026-09-04: `src/ml/`, `src/dataset_adapters/wasp_lab.py`, `PHASE3_BENCHMARK.md`) | Stage 1, task **1a** | Same dataset, same task. Reuse this code — do not rebuild it from scratch. |
+| **P4** — Personalized per-cow deviation (`Cattle_Fleet_Management_Master_PRD.md`: median/MAD robust z-score, baseline data from the simulator's "first complete simulated day" or 7 healthy physical-collar days) | Stage 1, task **1b** | **Deliberately different, not an extension.** The new PRD uses SPC/CUSUM (not median/MAD) and the public `MmCows` dataset (not simulator/collar data) for baselining. Treat P4's original formula as superseded — confirm that's actually the intent (see conflict below). |
+| **P5** — Fever/lameness risk research (label-gated disease prediction) | Stage 2 | **Dropped, not extended.** The new PRD never outputs a disease label anywhere (PRD §4/§5) — a deliberate scope narrowing, since neither dataset has illness ground truth to train or validate a diagnosis against. |
+
+Two concrete conflicts, both **resolved 2026-09-10 in favor of the new PRD** — recorded here so nobody re-derives the old numbers by habit:
+
+- **Metric bar mismatch.** `PHASE3_BENCHMARK.md`'s own release gate is cow-grouped macro F1 ≥ 0.85 (Walking / Other-Unknown recall ≥ 0.75). The new PRD (§2) targets beating the *published* SVM baseline (96.29% accuracy / 0.9625 macro-F1) under leave-one-cow-out CV. **Resolved: the PRD's target governs.** `PHASE3_BENCHMARK.md`'s 0.85 gate is left as-is in that file (it's a historical record of the Phase-3-only framing) but is no longer the bar M1a is measured against.
+- **Formula replacement.** `Cattle_Fleet_Management_Master_PRD.md`'s P4 section spells out a specific formula: `z_j = (x_j - median_j) / max(1.4826·MAD_j, ε)`, `D = median of the 3 largest |z|`, `risk = round(100·(1 - exp(-max(D-1,0)/3)))`. **Resolved: this formula is dropped, full stop.** M1b implements SPC/CUSUM per the new PRD's §6/§10, with no obligation to also produce a median/MAD score anywhere.
+
+## 3. Non-negotiables that still apply (from `AGENTS.md`, unchanged by the new PRD)
+
+- Never map Miscellaneous / low-confidence behavior to Restless (`AGENTS.md` golden rule 6; restated in `PHASE3_BENCHMARK.md`).
+- No clinical/veterinary diagnosis claims anywhere (golden rule 7) — the new PRD's §5 non-goals restate this even more strictly for Stage 2 specifically.
+- Cow-grouped / leave-one-cow-out evaluation only — never split windows from the same cow across train/test (`DECISION.md` ADR-015).
+- Secrets via environment/`.env` only, never hardcoded or logged (golden rule 5; PRD §12).
+- **New in this PRD:** raw IMU samples or raw temperature time series must never reach the LLM in Stage 2 (PRD §5 non-goal) — Stage 1 always sits between the sensors and the LLM. This is stricter than anything P1–P3 required, since none of them touch an LLM at all.
+
+## 4. Open questions blocking design decisions
+
+From the PRD itself (§16):
+
+1. Confirm the KB's target shift categories (PRD §9) or adjust. **Seeded 2026-09-10** with the PRD's own 5 proposed categories as the default answer, in an editable YAML file ([`cattle-anomaly-assistant/stage2_rag_assistant/kb/seed_data/shift_categories.yaml`](cattle-anomaly-assistant/stage2_rag_assistant/kb/seed_data/shift_categories.yaml)) specifically so this stays cheap to adjust — still genuinely open, not resolved, just unblocked.
+2. LLM provider/model choice for Stage 2 (PRD §12's pricing table is a starting point, not a decision). **Deferred 2026-09-10 (MTZ's explicit choice, not an oversight):** the whole M2a pipeline is built and tested against a deterministic `FakeLLMClient` — no real provider exists yet. `build_llm_client()` raises `NotImplementedError` for `anthropic`/`openai`/`google`; picking one later means writing one provider module + one factory branch, nothing else changes.
+3. Verify the MultiGraph-vet paper (PRD §3) directly — not blocking.
+4. Solo build or split across teammates for the two tracks.
+5. ~~Which coding tool~~ — **answered**: all three (Codex, Claude Code, Antigravity) will be used against this same repo. See §7 for the coordination risk that creates.
+
+Found while reconciling the PRD against the existing repo (not in the original document) — **asked MTZ directly on 2026-09-10:**
+
+6. ~~**Repo layout.**~~ — **Resolved 2026-09-10: new top-level folder in this same repo**, per PRD §13's own tree. Lives at [`cattle-anomaly-assistant/`](cattle-anomaly-assistant/), self-contained (own `pyproject.toml`/`requirements.txt`/`tests/`), not importing from `../src/`. Reused WASP-lab code gets copied in as a starting point, not cross-imported — see the M1a note below.
+7. ~~**What happens to the old Master PRD / `DECISION.md` / P1-P2 code.**~~ — **Resolved 2026-09-10: leave everything as-is.** `Cattle_Fleet_Management_Master_PRD.md`, `DECISION.md`, `herd_simulator/`, and `collar_gateway/` are untouched, no annotation, no archiving. They simply stop being the active roadmap; this file is what says so.
+
+~~Which F1 gate governs M1a~~ — resolved, folded into §2 above.
+
+## 5. Milestones & progress
+
+Legend: ⬜ not started · 🟨 in progress / partially built · ✅ done
+
+### M0 — Shared contract & mock generator (Sprint 0, joint, blocks everything else)
+**Status: ✅ Done (2026-09-10)**
+- [x] Decide repo layout (Open Question 6) — `cattle-anomaly-assistant/`, new top-level folder, this repo
+- [x] `AnomalyRecord`, `AnomalyExplanationQuery`, `AnomalyExplanationResponse`, `GoldenCase` as pydantic models (PRD §6.1, 6.3–6.5) — [`cattle-anomaly-assistant/shared/schemas/`](cattle-anomaly-assistant/shared/schemas/)
+- [x] Add `pydantic` to `pyproject.toml` / requirements — [`cattle-anomaly-assistant/pyproject.toml`](cattle-anomaly-assistant/pyproject.toml), [`requirements.txt`](cattle-anomaly-assistant/requirements.txt)
+- [x] Mock `AnomalyRecord` generator (PRD §6.2) — [`cattle-anomaly-assistant/stage2_rag_assistant/mock/generate_mock_records.py`](cattle-anomaly-assistant/stage2_rag_assistant/mock/generate_mock_records.py); seeded, so `generate_mock_batch(n, seed=...)` is byte-identical across runs (not required by the PRD, added because it's nearly free and matches this repo's own bias toward deterministic fixtures)
+- [x] Verify: [`tests/test_schemas_and_mock.py`](cattle-anomaly-assistant/tests/test_schemas_and_mock.py) — 8/8 passing (5 original + 3 added during review below). Covers schema-valid + JSON-round-trip mock output, the minority-anomaly distribution, reproducibility under a fixed seed, malformed/unknown-field/naive-timestamp/bad-distribution rejection, and `GoldenCase`/`AnomalyExplanationQuery`/`AnomalyExplanationResponse` composing correctly.
+- [x] **Hardened via `/review` (2026-09-10)**, since MTZ flagged M0 as the thing everything else builds on: all models now inherit a shared [`_base.StrictModel`](cattle-anomaly-assistant/shared/schemas/_base.py) (`extra="forbid"` — pydantic's default silently drops unrecognized fields instead of erroring, verified empirically before fixing); all 4 timestamp fields switched from `datetime` to pydantic's `AwareDatetime` (a naive timestamp from one stage and an aware one from another would raise `TypeError` the first time anything compares or sorts them — worth closing now, not after three pieces of code depend on it); `BehaviorStateDistribution24h` gained a model validator rejecting a distribution whose four proportions don't sum to ~1.0 (each was independently bounded [0,1] before, so `{1.0,1.0,1.0,1.0}` used to pass). All three are stricter-only changes — verified against every existing construction call before applying, so nothing that used to validate stopped validating.
+
+### Stage 1 track
+
+**M1a — Behavior classifier (`db-cow-walking`)**
+**Status: 🟨 Partially built in `src/`, unverified, not yet copied into `cattle-anomaly-assistant/` or wired to the new schema. Handed off 2026-09-10 to a collaborator — see [`STAGE1_HANDOFF.md`](STAGE1_HANDOFF.md) for the full onboarding (that doc is the paste-able one for this specific milestone; §1 above stays the whole-project one).**
+- [x] Dataset adapter — [`src/dataset_adapters/wasp_lab.py`](src/dataset_adapters/wasp_lab.py) (old location, left as-is per Open Question 7)
+- [x] Feature engineering, 112 features/window — [`src/ml/features.py`](src/ml/features.py) (old location)
+- [x] Model tiers (LogReg/RF/SVM/GBT/1D-CNN) + leave-one-cow-out harness — [`src/ml/benchmark.py`](src/ml/benchmark.py), [`src/ml/train.py`](src/ml/train.py) (old location)
+- [ ] **Copy** (not cross-import — see Open Question 6 resolution) the four files above into `cattle-anomaly-assistant/stage1_anomaly_detection/behavior_classifier/`, adapting imports/paths as needed. The `src/` originals stay untouched.
+- [ ] Actually run against real `db-cow-walking` data (via Kaggle per `PHASE3_BENCHMARK.md`, or local) and confirm a gate — the PRD's target governs now (§2), not `PHASE3_BENCHMARK.md`'s
+- [ ] Extend output to include `behavior_state_confidence` and `behavior_state_distribution_24h` in the exact shape `AnomalyRecord` needs (today's benchmark code reports aggregate metrics, not yet per-window confidence + a rolling 24h distribution)
+- [ ] `to_anomaly_record.py` wiring (M0's schemas are ready to import: `from shared.schemas import AnomalyRecord`)
+
+**M1b — MmCows ingestion + per-cow SPC/CUSUM baseline**
+**Status: ⬜ Not started** — no `MmCows` code anywhere in the repo yet
+- [ ] `MmCows` adapter: `cbt`, `ankle`, `thi`, optional `immu` (do not conflate `ankle` with raw acceleration — PRD §9 correction note)
+- [ ] Per-cow baseline (μ, σ) over a reference window
+- [ ] CUSUM implementation
+- [ ] Explicitly confirm this replaces (not supplements) the Master PRD's P4 median/MAD formula — see §2 conflict above
+
+**M1c — Synthetic injection harness**
+**Status: ⬜ Not started**
+- [ ] Injection harness for MmCows sequences (e.g. 30% grazing-time drop over 3 days, 2σ `cbt` rise with normal `thi`) — reused later by the §11 golden-set build
+- [ ] Note: distinct from `herd_simulator`'s existing scenario/fault-injection engine (`config/scenarios/*.json`, `scenario_runner.py`), which generates synthetic *telemetry* for the digital twin, not golden-set anomaly labels for this eval — don't conflate the two when scoping this task
+
+**M1d — `to_anomaly_record.py`**
+**Status: ⬜ Not started** — depends on M0 and real M1a/M1b output
+
+### Stage 2 track (unblocked as soon as M0 lands — don't wait on Stage 1)
+
+**M2a — KB + 5-stage pipeline against the mock**
+**Status: ✅ Done (2026-09-10)** — plan at `~/.claude/plans/start-m2a-ticklish-whistle.md`
+- [x] `shift_categories` / `shift_thresholds` / `literature_links` tables (PRD §9), plus a `keywords` column added to `shift_categories` beyond the PRD's literal example (needed for FR-5's free-text matching) — [`kb/schema.sql`](cattle-anomaly-assistant/stage2_rag_assistant/kb/schema.sql)
+- [x] Seed KB content — the PRD's 5 proposed categories, editable YAML — [`kb/seed_data/shift_categories.yaml`](cattle-anomaly-assistant/stage2_rag_assistant/kb/seed_data/shift_categories.yaml), loaded by [`kb/build_kb.py`](cattle-anomaly-assistant/stage2_rag_assistant/kb/build_kb.py) (idempotent rebuild, not append; `kb.sqlite3` is a gitignored build artifact)
+- [x] Record Assembler → Intent Router → Grounded Retrieval → Constrained Generation → Fallback Gate (PRD §7, §8), wired end to end by an orchestrator — [`pipeline/`](cattle-anomaly-assistant/stage2_rag_assistant/pipeline/) (`record_assembler.py`, `intent_router.py`, `retriever.py`, `generator.py`, `fallback_gate.py`, `response_builder.py`, `audit_log.py`, `orchestrator.py`)
+- [x] LLM provider/SDK pick (Open Question 2) — **deferred by design**: [`llm/client.py`](cattle-anomaly-assistant/stage2_rag_assistant/llm/client.py) + [`llm/providers/fake_provider.py`](cattle-anomaly-assistant/stage2_rag_assistant/llm/providers/fake_provider.py) is the only concrete provider; zero API keys or paid dependencies needed to run or test M2a
+- [x] Verify: 53/53 tests passing (`cd cattle-anomaly-assistant && .venv/bin/python -m pytest tests/ -v`), pyflakes clean, plus a manual end-to-end sanity check against real mock records
+
+Retrieval is exact-match SQL against `AnomalyRecord.driving_signals`' own short vocabulary (`cbt`, `lying_time`, `activity_magnitude`, `herd_isolation`, `behavior_state`), not the PRD §9 SQL comment's longer field-name examples, and never embedding similarity — see the schema/seed-YAML header comments. Two PRD gaps found and resolved during planning (both documented inline in the code, worth a glance): the `out_of_scope` intent has no destination in the frozen `PathTaken` enum (mapped to `fallback_insufficient_data`, distinguishable via `rationale`); FR-12's "high-severity disagreement" had no given formula (resolved as: disagreement between the LLM's own `llm_asserts_anomaly` boolean and Stage 1's flag, counted as high-severity only when Stage 1's own `anomaly_score` wasn't near the 0.5 boundary — see `fallback_gate.py`). One real bug found only by the manual end-to-end check, not by unit tests: the fake client's default responder returned one JSON blob serving both the router's and generator's expected shapes, but `GeneratedContent` is a `StrictModel` (`extra="forbid"`) — the router-only `"intent"` key made every real generation call fail validation and silently exhaust its retries. Fixed by having the default responder branch on system-prompt content instead. A second, smaller bug came from the retriever's own tests: the keyword `"rest"` (for lying/resting behavior) matched as a raw substring inside unrelated text like "the **rest** of the herd" — fixed with word-boundary matching and removing that one overly-generic keyword.
+
+**M2b — Ragas eval harness**
+**Status: ⬜ Not started**
+- [ ] `GoldenCase` JSONL + hand-written adversarial cases (these don't need real data)
+- [ ] Add `ragas` dependency
+- [ ] Faithfulness / answer relevancy / context precision / context recall wiring (PRD §11 Layer 2)
+
+**M2c — Calibration procedure (prototype only, on mock data)**
+**Status: ⬜ Not started**
+- [ ] τ-tuning mechanism runnable end-to-end on mock data (PRD §10 steps 1–3)
+- [ ] Explicitly flagged not-final until real Stage 1 output exists (steps 4–6)
+
+### Integration point (the one required sync — both tracks converge here)
+**Status: ⬜ Not started** — blocked on M1 and M2
+- [ ] Swap the mock generator for real `to_anomaly_record.py` output, zero Stage 2 pipeline code changes beyond the data source
+- [ ] Finalize τ on real calibration data (PRD §10 steps 4–6)
+- [ ] Rebuild the golden set's real/injected cases from actual Stage 1 output
+
+### Final phase
+**Status: ⬜ Not started**
+- [ ] Layer 1 + Layer 2 eval report, reported separately (never blended into one number)
+- [ ] Classical-only ablation vs. Stage 1 alone (Goal G4)
+- [ ] Packaging
+
+## 6. Where things stand right now, in one paragraph
+
+**M0 and M2a are both done and verified.** `cattle-anomaly-assistant/` has the four frozen pydantic schemas, a seeded mock `AnomalyRecord` generator, a SQLite KB (5 categories seeded), and a full 5-stage Stage 2 pipeline wired end to end by an orchestrator — 53/53 tests passing, running entirely against a fake LLM client with zero API keys or paid dependencies. Stage 1's behavior-classifier half (M1a) has a head start from this repo's own Phase 3 work — a dataset adapter, 112-feature extraction, and a 5-model leave-one-cow-out benchmark harness, written 2026-09-04 in `src/ml/` and `src/dataset_adapters/` — but it (a) hasn't been copied into the new self-contained folder yet, (b) hasn't been run against real data in this environment, and (c) doesn't yet emit the confidence/distribution shape `AnomalyRecord` needs. Everything else — that copy-and-extend step, `MmCows`, SPC/CUSUM, the injection harness, Ragas (M2b), real τ calibration (M2c), a real LLM provider, and the integration point — is unstarted.
+
+## 7. Working across three tools (and now a second person)
+
+Codex, Claude Code, and Antigravity don't share memory with each other. This file is the only thing that does. As of 2026-09-10 there's also a second human collaborator working M1a — same rule applies to them: this file (and their own entry point, [`STAGE1_HANDOFF.md`](STAGE1_HANDOFF.md)) is what carries context, not a conversation with either of you.
+
+- **Before starting a session in any tool, paste §1 and point it at this file plus `LLM_Diagnostic_Assistant_PRD.md`.** For the M1a collaborator specifically, point them at `STAGE1_HANDOFF.md` instead — it's scoped to just their task so they aren't stuck reading the whole Stage 2 spec.
+- **If two tools (or two people) are going to touch code at the same time, put them in separate git worktrees/branches** — the same way this session itself is running in one (`.claude/worktrees/read-decisions-agents-bfc26f`). This status file is the one artifact everyone would otherwise edit on the same branch at the same time; prefer one active editor of it at a time, or merge the Progress Log by hand — it's append-only, so a merge conflict there is just "keep both entries, sorted by date."
+
+## 8. Progress log
+
+*(Append a dated entry every time a milestone checkbox changes. Don't rewrite old entries — this is a log, not a summary.)*
+
+- **2026-09-10** — Read the PRD (`~/Downloads/llm-diagnostic-assistant-prd_1.md`), reconciled it against the existing platform (`AGENTS.md`, `DECISION.md`, `Cattle_Fleet_Management_Master_PRD.md`, `PHASE3_BENCHMARK.md`, `PROJECT_ALGORITHMS_INPUTS_OUTPUTS.md`). Copied the PRD into the repo as `LLM_Diagnostic_Assistant_PRD.md`. Created this status doc. Added a pointer to both new docs in `AGENTS.md` §1's primary-directive reading list. No pipeline code written yet — **M0 is the next task.**
+- **2026-09-10** — MTZ confirmed this is a deliberate pivot away from the old Master PRD's P4/P5 roadmap, not a reconciliation exercise: `LLM_Diagnostic_Assistant_PRD.md` now governs outright wherever it conflicts with the old design (§2 updated accordingly — old F1 gate and median/MAD formula are both explicitly dropped). Asked MTZ to resolve Open Questions 6–7 (repo layout; what happens to the old docs/P1-P2 code) before creating any M0 files.
+- **2026-09-10** — MTZ answered: new top-level `cattle-anomaly-assistant/` folder in this repo (Q6); leave the old Master PRD/`DECISION.md`/P1-P2 code untouched (Q7). Built M0: `cattle-anomaly-assistant/` scaffolded per PRD §13 with its own `pyproject.toml`/`requirements.txt`; `shared/schemas/` implements `AnomalyRecord`, `AnomalyExplanationQuery`, `AnomalyExplanationResponse`, `GoldenCase` (Section 6.1/6.3/6.4/6.5); `stage2_rag_assistant/mock/generate_mock_records.py` implements the seeded mock generator (Section 6.2). Installed into a local `.venv` and ran `pytest` — 5/5 passing (schema validity + JSON round-trip, minority-anomaly distribution, seed-reproducibility, malformed-record rejection, cross-model composition). Also sanity-checked the CLI (`python -m stage2_rag_assistant.mock.generate_mock_records`) by hand. **M0's "done when" criterion from PRD §14 is met. Next: M1a — copy the existing WASP-lab classifier code into `stage1_anomaly_detection/behavior_classifier/` and extend its output to the schema's confidence/distribution shape, or start M2a (KB + pipeline against the mock) — both are unblocked.**
+- **2026-09-10** — Ran `/review` against M0 per MTZ's request ("needs to be perfect, everything builds on it"). No project-local or global `checklist.md` was available for this gstack install, so ran a direct manual pass against the actual diff instead of the templated multi-specialist dispatch (justified: 429-line, single-language, no-SQL/no-auth/no-LLM diff — the specialist categories mostly don't apply yet). Found and fixed 3 real gaps, each verified empirically before and after: (1) pydantic's default `extra="ignore"` would silently drop a typo'd/renamed field instead of erroring — added a shared `StrictModel` base (`extra="forbid"`) all 4 schemas now inherit; (2) all 4 `datetime` fields accepted naive timestamps, which would raise `TypeError` the moment mixed naive/aware values get compared across stages later — switched to pydantic's built-in `AwareDatetime`; (3) `behavior_state_distribution_24h`'s four proportions were each bounded [0,1] independently with no check that they summed to 1.0 — added a model validator (0.01 tolerance for real-world rounding). Added 3 regression tests for these. Then applied the gstack Testing/Maintainability specialist checklists directly (found at `~/.claude/skills/gstack/review/specialists/`, even though the project-local `checklist.md` was missing): pyflakes came back clean (no dead code/unused imports), but the Testing checklist's "new code with zero coverage" category caught two real gaps — `CitedFact` and `AnomalyHistoryEntry` are both part of the frozen contract but neither was ever validated with real non-empty data anywhere, because the mock generator hardcoded `recent_anomaly_history=[]` always. Fixed both: the mock now populates 1-3 synthetic history entries on ~20% of records, and the response test now builds a real `CitedFact` instead of an empty list. Full suite: 8/8 passing (same 8 test functions, several gained assertions), mock CLI re-verified by hand.
+- **2026-09-10** — MTZ asked to start M2a. Explored the repo (Explore agent), designed the approach (Plan agent), reviewed and refined it, then asked one genuinely blocking question: which LLM provider. **MTZ chose to defer entirely** — build the whole pipeline against a deterministic `FakeLLMClient`, no real provider yet. Plan approved and written to `~/.claude/plans/start-m2a-ticklish-whistle.md`. Built M2a in full: KB (`kb/schema.sql`, `kb/seed_data/shift_categories.yaml` seeded with the PRD's 5 categories, `kb/build_kb.py`), LLM client abstraction (`llm/client.py`, `llm/providers/fake_provider.py`), and all 5 pipeline stages plus an orchestrator (`pipeline/`). Resolved two PRD gaps found during planning: `out_of_scope` intent has no destination in the frozen `PathTaken` enum (mapped to `fallback_insufficient_data`); FR-12's "high-severity disagreement" had no given formula (resolved via a structured `llm_asserts_anomaly` boolean compared against Stage 1's flag, gated on whether Stage 1 itself was confident). Caught and fixed two real bugs during verification, not just claimed correctness: the retriever's keyword matching used raw substrings, so `"rest"` false-matched inside "the rest of the herd" (fixed with word-boundary regex, caught by `test_retriever.py` failing on first run); and the fake LLM client's default responder returned one blob serving both the router's and generator's shapes, but `GeneratedContent`'s `extra="forbid"` rejected the router-only `"intent"` key on every real generation call, silently exhausting retries — invisible to any unit test (they all script exact responses) and only caught by the plan's own manual end-to-end sanity-check step. Final state: 53/53 tests passing, pyflakes clean, manual sanity check against 5 real mock records confirmed correct `llm_grounded`/`fallback_insufficient_data` routing. **M2a is done. Next: M1a (port the WASP-lab classifier into the new folder) or M2b (Ragas eval harness) — both unblocked. A real LLM provider is still needed before this pipeline does anything beyond demo/test.**
+- **2026-09-10** — MTZ is bringing in a collaborator to own M1a (the WASP-lab behavior classifier). Wrote [`STAGE1_HANDOFF.md`](STAGE1_HANDOFF.md) as their dedicated onboarding doc — scoped to just M1a rather than the whole project, since they don't need Stage 2's details to do their job. Committed all of M0 + M2a to git (see commit history) so the collaborator has the full working state, not just docs, to build on.
+
+---
+
+**Keeping this doc alive:** when you finish work, tick the box in §5, update that milestone's status line (⬜ → 🟨 → ✅), and append to §8. If you resolve an Open Question in §4, don't delete it — add a dated "Resolved: ..." line under it so the reasoning survives.
