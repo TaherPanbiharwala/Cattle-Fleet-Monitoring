@@ -1,0 +1,139 @@
+# Knowledge base seed content. See LLM_Diagnostic_Assistant_PRD.md Section 9.
+#
+# PLACEHOLDER pending MTZ's confirmation (PRD Open Question 1) — these are the
+# PRD's own 5 proposed categories with illustrative threshold values. Editing
+# this file (then rerunning build_kb.py --overwrite) is the whole adjustment
+# path; no code changes needed to change categories, thresholds, or citations.
+#
+# `signal_name` uses the exact same short vocabulary as AnomalyRecord's
+# driving_signals ("cbt", "lying_time", "activity_magnitude", "herd_isolation",
+# "behavior_state") so retrieval is a plain exact-match lookup, never a fuzzy
+# prefix or embedding search. The one exception is the synthetic
+# "thi_context" signal_name below: `thi` is context-only, never itself a
+# driving signal (per AnomalyRecord's own field docs), so this row is
+# deliberately unreachable by direct driving-signal lookup — it's returned
+# only because it shares a category_id with the "cbt" row in the same
+# category, which is the retrieval mechanism FR-10's multi-signal reasoning
+# requirement depends on.
+#
+# threshold_value is signed: paired with threshold_direction, it reads
+# literally as "<field> is <direction> <threshold_value>" (e.g. "lying_time
+# deviation is above 2.0 sigma").
+
+categories:
+  - name: sustained_grazing_reduction
+    description: >
+      Sustained reduction in grazing time relative to the cow's own 24h
+      baseline behavior distribution. An early behavioral indicator of
+      illness onset in dairy cattle, well before physiological signs appear.
+    sources: ["frondelius_2017", "barker_2018"]
+    keywords: ["grazing", "graze", "feeding", "feed intake"]
+    thresholds:
+      - signal_name: behavior_state
+        threshold_value: -30.0
+        threshold_direction: below
+        sustained_days: 3
+        notes: >
+          Represents a relative drop in the cow's grazing share of
+          behavior_state_distribution_24h vs. her own baseline, not a raw
+          sigma value (behavior_state has no dedicated deviation-sigma field).
+    literature_links:
+      - citation: "Frondelius et al. 2017"
+        summary_text: >
+          Reduced grazing time is one of the earliest detectable behavioral
+          changes preceding clinical signs of illness in grazing dairy cattle.
+
+  - name: sustained_lying_increase
+    description: >
+      Sustained increase in lying/resting time relative to the cow's own
+      24h baseline. Associated with reduced mobility, discomfort, or early
+      illness — distinct from normal rumination-driven resting.
+    sources: ["walker_2019"]
+    keywords: ["lying", "lying down", "resting", "recumbent"]
+    thresholds:
+      - signal_name: lying_time
+        threshold_value: 2.0
+        threshold_direction: above
+        sustained_days: 2
+        notes: "lying_time_deviation_sigma sustained above +2.0 for 2+ days"
+    literature_links:
+      - citation: "Walker et al. 2019"
+        summary_text: >
+          Sustained increases in lying time beyond a cow's individual
+          baseline correlate with early-stage lameness and metabolic
+          disorders in dairy herds.
+
+  - name: activity_magnitude_reduction
+    description: >
+      Reduction in overall activity magnitude relative to the cow's own
+      baseline. Only relevant when the optional immu (neck IMU) signal is
+      in use; a general lethargy/malaise indicator.
+    sources: ["barker_2018"]
+    keywords: ["activity", "movement", "lethargy", "inactive"]
+    thresholds:
+      - signal_name: activity_magnitude
+        threshold_value: -2.0
+        threshold_direction: below
+        sustained_days: null
+        notes: "activity_magnitude_deviation_sigma below -2.0"
+    literature_links:
+      - citation: "Barker et al. 2018"
+        summary_text: >
+          A marked drop in overall activity magnitude, independent of
+          specific behavior classification, is a general-purpose malaise
+          indicator applicable across multiple underlying causes.
+
+  - name: herd_isolation_increase
+    description: >
+      Increase in social distance from the herd centroid/neighbors relative
+      to the cow's own baseline. Only relevant if the fleet-analytics
+      proximity graph exists. Isolation is a well-documented sickness
+      behavior in herd animals.
+    sources: ["solano_2020"]
+    keywords: ["isolation", "isolated", "distance from herd", "straggler"]
+    thresholds:
+      - signal_name: herd_isolation
+        threshold_value: 0.7
+        threshold_direction: above
+        sustained_days: null
+        notes: "herd_isolation_score (0-1 scale) above 0.7"
+    literature_links:
+      - citation: "Solano et al. 2020"
+        summary_text: >
+          Cattle exhibit sickness-behavior-driven social withdrawal from the
+          herd, measurable as increased distance from herdmates prior to
+          overt clinical signs.
+
+  - name: temperature_deviation_with_thi_context
+    description: >
+      Core body temperature deviation from the cow's own baseline,
+      interpreted differently depending on whether ambient THI (temperature-
+      humidity index) is also elevated. Elevated THI alongside a temperature
+      deviation suggests an environmental (heat-stress) explanation is
+      available; a temperature deviation without elevated THI points toward
+      the animal specifically. This is the concrete worked example behind
+      FR-10's multi-signal reasoning requirement.
+    sources: ["lamanna_review"]
+    keywords: ["temperature", "fever", "heat stress", "thi"]
+    thresholds:
+      - signal_name: cbt
+        threshold_value: 2.0
+        threshold_direction: above
+        sustained_days: null
+        notes: "primary trigger: cbt_deviation_sigma above +2.0"
+      - signal_name: thi_context
+        threshold_value: 72.0
+        threshold_direction: above
+        sustained_days: null
+        notes: >
+          secondary/context row, never independently retrieved: thi above
+          72.0 suggests an environmental (heat-stress) explanation is
+          available for a concurrent cbt deviation; below 72.0 points toward
+          the animal specifically.
+    literature_links:
+      - citation: "Lamanna review"
+        summary_text: >
+          Core body temperature deviations should be interpreted jointly
+          with ambient heat-stress index, since elevated ambient THI can
+          independently explain a temperature rise that would otherwise
+          suggest illness.

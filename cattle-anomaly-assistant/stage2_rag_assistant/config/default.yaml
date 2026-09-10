@@ -1,0 +1,23 @@
+# Stage 2 pipeline configuration. See LLM_Diagnostic_Assistant_PRD.md Section 12.
+llm:
+  provider: fake  # anthropic | openai | google | fake — deferred (PRD Open Question 2); fake needs no API key
+  model: fake-model
+
+router:
+  # FR-3: single cheap call, deliberately small budget, separate from generation's call.
+  max_tokens: 32
+  timeout_s: 10.0
+
+generation:
+  max_tokens: 512
+  timeout_s: 20.0
+  max_retries: 1  # FR-9: one retry on malformed output, then fallback_insufficient_data
+
+fallback:
+  # PLACEHOLDER — NOT CALIBRATED. PRD Section 10 steps 4-6 need real Stage 1 output
+  # to calibrate tau properly; that's milestone M2c, not this one.
+  tau: 0.6
+  high_severity_margin: 0.3
+
+kb:
+  db_path: stage2_rag_assistant/kb/kb.sqlite3

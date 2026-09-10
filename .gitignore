@@ -51,6 +51,10 @@ ml_artifacts/
 wandb/
 notebooks/.ipynb_checkpoints/
 
+# cattle-anomaly-assistant/stage2_rag_assistant/kb — built from schema.sql +
+# seed_data/*.yaml by build_kb.py; the YAML is the source of truth, not this.
+*.sqlite3
+
 # OS & IDE
 .DS_Store
 .vscode/

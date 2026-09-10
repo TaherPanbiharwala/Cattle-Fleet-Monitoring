@@ -1,0 +1,18 @@
+[project]
+name = "cattle-anomaly-assistant"
+version = "0.1.0"
+description = "Cattle collar behavioral-anomaly detection & explanation assistant (Stage 1 ML + Stage 2 RAG)"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.5",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
