@@ -13,6 +13,8 @@ You are working on the **Intelligent Cattle Fleet Management Platform**. This pr
 > 1. [DECISION.md](file:///Users/taherpanbiharwala/Desktop/IoT/DECISION.md) — Complete historical & architectural decision records.
 > 2. [Cattle_Fleet_Management_Master_PRD.md](file:///Users/taherpanbiharwala/Desktop/IoT/Cattle_Fleet_Management_Master_PRD.md) — System requirements, phased roadmap, and exact mathematical specifications.
 > 3. [Cattle_Fleet_Management_HerdSimulator_PRD.md](file:///Users/taherpanbiharwala/Desktop/IoT/Cattle_Fleet_Management_HerdSimulator_PRD.md) — Digital-twin simulator component specification.
+> 4. [LLM_Diagnostic_Assistant_PRD.md](file:///Users/taherpanbiharwala/Desktop/IoT/LLM_Diagnostic_Assistant_PRD.md) — Frozen spec for the Stage 1 (anomaly detection) + Stage 2 (RAG explanation) system that redesigns P4/P5 below. Read this if your task touches behavior classification beyond P3, per-cow baselines, or anything LLM-facing.
+> 5. [LLM_ASSISTANT_STATUS.md](file:///Users/taherpanbiharwala/Desktop/IoT/LLM_ASSISTANT_STATUS.md) — Living milestone/progress tracker for #4, shared across Codex/Claude Code/Antigravity sessions. Check it before assuming what's built; update it after you change that.
 
 ---
 
