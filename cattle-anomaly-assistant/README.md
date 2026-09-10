@@ -8,13 +8,78 @@ Read [`../LLM_Diagnostic_Assistant_PRD.md`](../LLM_Diagnostic_Assistant_PRD.md) 
 
 ```bash
 cd cattle-anomaly-assistant
-python3 -m venv .venv
-.venv/bin/python -m ensurepip --upgrade
-.venv/bin/python -m pip install -r requirements.txt
+python3.12 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -e '.[behavior,dev]'
 .venv/bin/python -m pytest tests/ -v
 ```
 
-The Stage 1 test fixture is checked in and does not need MmCows. It covers CSV discovery, CDT conversion, coverage, immutable baselines, zero variance, CUSUM resets, output publication, and deterministic injections.
+This is the supported local setup for Python 3.11–3.13. Python 3.14 is intentionally unsupported until compatible XGBoost wheels are verified. The test fixtures are checked in; the public datasets are not. Core CUSUM-only use may install `-e '.[dev]'` instead.
+
+## M1a — WASP six-axis behaviour benchmark
+
+`.venv/bin/behavior-classifier` rebuilds a four-state XGBoost classifier from public WASP source CSVs. It reads only the six MPU9250 acceleration/gyroscope columns, makes 50-sample (5-second) windows at 10 Hz with a 25-sample stride, and produces 112 deterministic statistical/spectral features. It has no import from the older repository `src/ml` code.
+
+The internal class order is contiguous for XGBoost: resting, grazing, walking, miscellaneous. Output is decoded to the platform-safe behaviour codes `0`, `1`, `3`, and `5`; miscellaneous is never treated as Restless (`4`). The reported maximum class probability is explicitly **uncalibrated**.
+
+Start with a no-write check of the local public data. The attached friend-supplied `.pkl` may be mentioned only as an inspection reference: it is hashed but never loaded or deserialized.
+
+```bash
+.venv/bin/behavior-classifier preflight \
+  --dataset-dir /Users/taherpanbiharwala/Desktop/IoT/db-cow-walking \
+  --legacy-pickle /Users/taherpanbiharwala/Downloads/cow_behavior_xgboost.pkl
+```
+
+The preflight reports only derived counts, class/cow support, timing-gap exclusions, and a combined source hash. It must pass before training. The expected public layout has `Resting`, `Grazing`, `Walking`, and `Miscellaneous behaviors` label directories and CSVs with `Time` plus the six `MPU9250_*` channels.
+
+Run the grouped public benchmark into a new directory:
+
+```bash
+.venv/bin/behavior-classifier benchmark \
+  --dataset-dir /Users/taherpanbiharwala/Desktop/IoT/db-cow-walking \
+  --output-dir /Users/taherpanbiharwala/Desktop/wasp-behavior-benchmark-001 \
+  --legacy-pickle /Users/taherpanbiharwala/Downloads/cow_behavior_xgboost.pkl
+```
+
+This uses nested leave-one-cow-out (LOCO): each cow is held out once, tuning uses only the remaining cows, and the primary score is the unweighted mean of outer-fold macro F1 over classes actually present in each held-out cow. It also reports pooled out-of-fold F1, class support/recall (`null` when a held-out cow has no support), confusion matrix, and fixed-seed cow-level uncertainty.
+
+The published `0.9625` random-split result is stored as a reference only; it is not a LOCO target. A native JSON artifact is created only if this provisional **public-benchmark** gate passes: mean LOCO macro F1 ≥0.85 plus pooled Walking and Miscellaneous recall ≥0.75. Passing this gate is not collar, farm, health, or clinical validation.
+
+Benchmark output never contains raw IMU rows or feature matrices:
+
+- `benchmark_report.json`, `fold_metrics.jsonl`, `class_metrics.json`, `confusion_matrix.json`, and `uncertainty.json` — grouped evaluation evidence.
+- `dataset_provenance.json` — aggregate hashes and counts only.
+- `behavior_model.json` and `behavior_model.manifest.json` — native XGBoost JSON plus feature/class/window/provenance/hash contract, only if the benchmark gate passes.
+
+Verify a qualifying artifact before any inference:
+
+```bash
+.venv/bin/behavior-classifier verify-artifact \
+  --model-path /Users/taherpanbiharwala/Desktop/wasp-behavior-benchmark-001/behavior_model.json
+```
+
+`.pkl`/`.pickle` paths are rejected with `LEGACY_PICKLE_REJECTED`. Model tampering, changed features, unsupported manifest versions, non-finite values, and invalid probability shapes all fail closed with an actionable JSON error.
+
+## M1d — future same-cow daily fusion
+
+The public WASP behavior data and public MmCows physiology data are different cows, dates, sensors, and deployments. **Do not join them.** `fuse-daily` deliberately rejects these sources with `CONTEXT_SOURCE_NOT_RUNTIME`; it creates no `AnomalyRecord` and never silently reports a non-anomaly.
+
+For a future compatible deployment, the workflow is:
+
+```bash
+# 1. Predict from input-only 50x6, 10 Hz runtime IMU JSONL.
+.venv/bin/behavior-classifier predict --help
+
+# 2. Aggregate only the derived predictions, with an explicit expected count.
+.venv/bin/behavior-classifier aggregate-context --help
+
+# 3. Fuse only exactly aligned same-cow runtime behavior and CUSUM context.
+.venv/bin/behavior-classifier fuse-daily --help
+```
+
+`predict` accepts only `same_cow_runtime` records with 50 timestamped 10 Hz six-axis samples, declared `m_s2`/`deg_s` units, and a calibration ID; it writes `behavior_predictions.jsonl` without copying the raw samples. `aggregate-context` creates `BehaviorDailyContext` records when ≥75% of expected windows are observed, using a deterministic daily state/distribution and uncalibrated confidence. `fuse-daily` requires matching `(cow_id, local_date, timezone, deployment_id)` keys, unique rows, valid coverage, and matching runtime provenance; it writes `anomaly_records.jsonl` only after every requested join validates atomically.
+
+Fusion copies the CUSUM flag, score, physiology values, and literal drivers unchanged. Behaviour is context only in this release: it does not alter the score or add `behavior_state` as a driver. Records use the end of the local day converted to UTC and retain the prior three successfully fused records for the same cow. The Stage 2 record assembler already consumes the resulting shared `AnomalyRecord` schema without a code change.
 
 ## M1b — MmCows daily personal-baseline detector
 

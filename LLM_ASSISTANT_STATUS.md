@@ -34,7 +34,7 @@ The PRD you were handed says "nothing has been implemented yet... greenfield bui
 
 Two concrete conflicts, both **resolved 2026-09-10 in favor of the new PRD** — recorded here so nobody re-derives the old numbers by habit:
 
-- **Metric bar mismatch.** `PHASE3_BENCHMARK.md`'s own release gate is cow-grouped macro F1 ≥ 0.85 (Walking / Other-Unknown recall ≥ 0.75). The new PRD (§2) targets beating the *published* SVM baseline (96.29% accuracy / 0.9625 macro-F1) under leave-one-cow-out CV. **Resolved: the PRD's target governs.** `PHASE3_BENCHMARK.md`'s 0.85 gate is left as-is in that file (it's a historical record of the Phase-3-only framing) but is no longer the bar M1a is measured against.
+- **Metric bar mismatch.** `PHASE3_BENCHMARK.md`'s own release gate is cow-grouped macro F1 ≥ 0.85 (Walking / Other-Unknown recall ≥ 0.75). The new PRD (§2) targets beating the *published* SVM baseline (96.29% accuracy / 0.9625 macro-F1) under leave-one-cow-out CV. **Updated 2026-09-11:** the published 0.9625 came from a random split and is scientifically non-comparable to LOCO, so it is a reference only. M1a's only artifact-eligibility evidence is nested LOCO; its provisional public-benchmark gate is mean outer-fold macro F1 ≥0.85 plus pooled Walking/Miscellaneous recall ≥0.75. Passing remains neither field nor clinical validation.
 - **Formula replacement.** `Cattle_Fleet_Management_Master_PRD.md`'s P4 section spells out a specific formula: `z_j = (x_j - median_j) / max(1.4826·MAD_j, ε)`, `D = median of the 3 largest |z|`, `risk = round(100·(1 - exp(-max(D-1,0)/3)))`. **Resolved: this formula is dropped, full stop.** M1b implements SPC/CUSUM per the new PRD's §6/§10, with no obligation to also produce a median/MAD score anywhere.
 
 ## 3. Non-negotiables that still apply (from `AGENTS.md`, unchanged by the new PRD)
@@ -78,14 +78,12 @@ Legend: ⬜ not started · 🟨 in progress / partially built · ✅ done
 ### Stage 1 track
 
 **M1a — Behavior classifier (`db-cow-walking`)**
-**Status: 🟨 Partially built in `src/`, unverified, not yet copied into `cattle-anomaly-assistant/` or wired to the new schema. Handed off 2026-09-10 to a collaborator — see [`STAGE1_HANDOFF.md`](STAGE1_HANDOFF.md) for the full onboarding (that doc is the paste-able one for this specific milestone; §1 above stays the whole-project one).**
-- [x] Dataset adapter — [`src/dataset_adapters/wasp_lab.py`](src/dataset_adapters/wasp_lab.py) (old location, left as-is per Open Question 7)
-- [x] Feature engineering, 112 features/window — [`src/ml/features.py`](src/ml/features.py) (old location)
-- [x] Model tiers (LogReg/RF/SVM/GBT/1D-CNN) + leave-one-cow-out harness — [`src/ml/benchmark.py`](src/ml/benchmark.py), [`src/ml/train.py`](src/ml/train.py) (old location)
-- [ ] **Copy** (not cross-import — see Open Question 6 resolution) the four files above into `cattle-anomaly-assistant/stage1_anomaly_detection/behavior_classifier/`, adapting imports/paths as needed. The `src/` originals stay untouched.
-- [ ] Actually run against real `db-cow-walking` data (via Kaggle per `PHASE3_BENCHMARK.md`, or local) and confirm a gate — the PRD's target governs now (§2), not `PHASE3_BENCHMARK.md`'s
-- [ ] Extend output to include `behavior_state_confidence` and `behavior_state_distribution_24h` in the exact shape `AnomalyRecord` needs (today's benchmark code reports aggregate metrics, not yet per-window confidence + a rolling 24h distribution)
-- [ ] `to_anomaly_record.py` wiring (M0's schemas are ready to import: `from shared.schemas import AnomalyRecord`)
+**Status: 🟨 Implemented and fixture-verified in `cattle-anomaly-assistant/`; public-data preflight passed on the local 441-event WASP copy. The full nested-LOCO benchmark remains a user-run CPU task, and its result must not be claimed before it runs.**
+- [x] Self-contained six-axis WASP adapter and 112-feature extraction in `cattle-anomaly-assistant/stage1_anomaly_detection/behavior_classifier/`; the historical `src/` modules are untouched and never imported.
+- [x] CPU XGBoost nested LOCO with native JSON-only artifacts, hash manifest, uncalibrated `softprob` confidence, public-benchmark gate, and `.pkl` rejection/provenance-only hashing.
+- [x] Actual local public-data preflight: 441 events / 10 cows / 10,240 valid derived windows; no benchmark result or accuracy claim has been made yet.
+- [x] Derived behavior prediction and daily context shape (`behavior_state`, uncalibrated confidence, four-state daily distribution) matching the shared `AnomalyRecord` contract.
+- [ ] User-run full nested-LOCO benchmark and review of its public-benchmark-only evidence.
 
 **M1b — MmCows ingestion + per-cow SPC/CUSUM baseline**
 **Status: ✅ Implemented, fixture-verified, and real-MmCows smoke-tested (2026-09-11).** See [`STAGE1_ANOMALY_BASELINE_HANDOFF.md`](STAGE1_ANOMALY_BASELINE_HANDOFF.md) for the onboarding and [`cattle-anomaly-assistant/README.md`](cattle-anomaly-assistant/README.md) for staged-data commands.
@@ -101,7 +99,10 @@ Legend: ⬜ not started · 🟨 in progress / partially built · ✅ done
 - [x] Kept distinct from `herd_simulator`'s existing scenario/fault-injection engine (`config/scenarios/*.json`, `scenario_runner.py`), which generates synthetic *telemetry* for the digital twin, not golden-set anomaly labels for this eval
 
 **M1d — `to_anomaly_record.py`**
-**Status: ⬜ Not started** — depends on M0 and real M1a/M1b output
+**Status: ✅ Contract implemented and fixture-verified; real public-data fusion deliberately deferred.**
+- [x] Versioned `BehaviorDailyContext` / `CusumDailyResult`, exact same-cow/day/timezone/deployment join, atomic JSONL `AnomalyRecord` publication, and Stage 2 assembler compatibility test.
+- [x] Current MmCows CUSUM output adapts to explicit `mmcows_public` provenance and is rejected alongside `wasp_public`; no fabricated cross-dataset record is produced.
+- [ ] Enable a real fused run only after a future deployment supplies aligned same-cow runtime behavior and physiology context.
 
 ### Stage 2 track (unblocked as soon as M0 lands — don't wait on Stage 1)
 
@@ -140,7 +141,7 @@ Retrieval is exact-match SQL against `AnomalyRecord.driving_signals`' own short 
 
 ## 6. Where things stand right now, in one paragraph
 
-**M0 and M2a are both done and verified.** `cattle-anomaly-assistant/` has the four frozen pydantic schemas, a seeded mock `AnomalyRecord` generator, a SQLite KB (5 categories seeded), and a full 5-stage Stage 2 pipeline wired end to end by an orchestrator — 53/53 tests passing, running entirely against a fake LLM client with zero API keys or paid dependencies. Stage 1's behavior-classifier half (M1a) has a head start from this repo's own Phase 3 work — a dataset adapter, 112-feature extraction, and a 5-model leave-one-cow-out benchmark harness, written 2026-09-04 in `src/ml/` and `src/dataset_adapters/` — but it (a) hasn't been copied into the new self-contained folder yet, (b) hasn't been run against real data in this environment, and (c) doesn't yet emit the confidence/distribution shape `AnomalyRecord` needs. Everything else — that copy-and-extend step, `MmCows`, SPC/CUSUM, the injection harness, Ragas (M2b), real τ calibration (M2c), a real LLM provider, and the integration point — is unstarted.
+**M0 and M2a are done and verified; M1b/M1c are real-data smoke-tested.** `cattle-anomaly-assistant/` now also has a self-contained M1a behavior package: strict public WASP six-axis ingestion, 112-feature CPU XGBoost nested-LOCO benchmarking, native JSON artifact verification, and behavior daily context. M1d's exact-join adapter is implemented and passes a synthetic same-cow runtime contract through the existing Stage 2 assembler; it intentionally refuses the incompatible public WASP/MmCows pair. The local 441-event WASP preflight passed, but no full real LOCO score has been run or claimed. Ragas, τ calibration, a real LLM provider, real same-deployment fusion, and the final integration/evaluation remain unfinished.
 
 ## 7. Working across three tools (and now a second person)
 
@@ -164,6 +165,7 @@ Codex, Claude Code, and Antigravity don't share memory with each other. This fil
 - **2026-09-11** — Read-only preflight against MTZ's locally staged core MmCows subset at `Desktop/MmCows/.../main_data` succeeded: 10 cows, 150 daily windows, and 20 usable CBT/lying-time baselines; IMMU was intentionally not staged. The source CBT header is `temperature_C`, so the adapter now recognizes the official header directly. Also removed repeated shared-THI cadence recomputation exposed by this real-data check; full assistant suite remains 65/65 passing. The preflight identified 11 unlabelled mechanical anomaly windows; this is not a health or diagnostic finding. A normal derived-output run remains for MTZ to execute.
 - **2026-09-11** — MTZ completed the real derived-output run from staged CBT/ankle/THI data (`run-001`): 10 cows, 150 daily windows, 20 usable core baselines, and 11 mechanical indicators. MTZ then staged the official 6.8 GB IMMU per-tag export. Updated the adapter to accept `immu/T01/T01_0721.csv`-style layout and `accel_{x,y,z}_mps2` columns, exclude individual non-finite acceleration rows without imputation, and preserve daily coverage accounting. The 2026-09-11 IMMU preflight and derived-output run (`run-002-with-immu`) both completed successfully: all 30 CBT/lying-time/activity baselines were usable; the same 11 windows were flagged, driven by CBT (9) and lying time (3), with no activity driver. Corrected the synthetic injection semantics to use an explicit baseline-relative sigma target, then expanded the reusable scenario template to cover CBT, both lying-time directions, activity, combined changes, and a clean control. Stage-1 fixture suite: 13/13 passing. The remaining M1c work is MTZ's user-run real-data injection smoke test; M1a and M1d remain independent unfinished work.
 - **2026-09-11** — MTZ ran the expanded real-data injection smoke test (`injection-check-002`) with all 30 baselines available. CBT rise (T01), lying rise (T02), lying drop (T03), activity drop (T04), and the three-signal combined change (T05) each crossed CUSUM on their third injected day (2023-07-31); the T06 clean control stayed unflagged throughout 2023-07-29 through 2023-08-01. The output contained 24 flagged windows because CUSUM correctly retains an alarm state for some post-injection days until the accumulated evidence decays or resets. M1c is complete. M1a and M1d remain independent unfinished work.
+- **2026-09-11** — Implemented M1a/M1d safely in `cattle-anomaly-assistant/`: an independent six-axis WASP adapter and 112-feature XGBoost package; nested LOCO as the sole public-benchmark eligibility protocol; native JSON model plus manifest/hash verification; hard Python-pickle rejection (the supplied legacy file was SHA-256 inspected only); and derived behavior prediction/daily-context tooling. Added a fail-closed `to_anomaly_record.py` contract joining only exact same-cow runtime behavior/CUSUM records, with Stage 2 assembler coverage. Public WASP/MmCows provenance is explicitly rejected rather than falsely fused. Local preflight against the staged WASP copy passed: 441 events, 10 cows, 10,240 valid derived windows, three timing-gap/short-segment exclusions. The complete assistant suite has 74 passing tests. Full nested-LOCO evidence remains a user-run CPU benchmark; no accuracy or field claim is recorded.
 
 ---
 
