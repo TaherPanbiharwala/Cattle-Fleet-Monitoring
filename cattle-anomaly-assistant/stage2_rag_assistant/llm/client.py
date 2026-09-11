@@ -66,6 +66,10 @@ def build_llm_client(config: "LLMConfig") -> LLMClient:
         from stage2_rag_assistant.llm.providers.fake_provider import FakeLLMClient
 
         return FakeLLMClient()
+    if config.provider == "openrouter":
+        from stage2_rag_assistant.llm.providers.openrouter_provider import OpenRouterLLMClient
+
+        return OpenRouterLLMClient(model=config.model)
     raise NotImplementedError(
         f"LLM provider {config.provider!r} is not implemented yet — see LLM_ASSISTANT_STATUS.md Open "
         "Question 2. Set llm.provider: fake in config until a real provider is chosen and built."

@@ -16,7 +16,7 @@ from shared.schemas._base import StrictModel
 
 DEFAULT_CONFIG_PATH = Path(__file__).parent / "default.yaml"
 
-LLMProvider = Literal["anthropic", "openai", "google", "fake"]
+LLMProvider = Literal["anthropic", "openai", "google", "openrouter", "fake"]
 
 
 class LLMConfig(StrictModel):

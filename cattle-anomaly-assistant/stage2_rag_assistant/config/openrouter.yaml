@@ -1,0 +1,34 @@
+# Real-provider config — OpenRouter (minimax/minimax-m3), resolving
+# LLM_ASSISTANT_STATUS.md Open Question 2 for the main Stage 2 pipeline.
+# NOT the checked-in default (default.yaml stays on the fake provider so
+# tests and a bare `run_eval`/`tune_threshold` invocation never need an API
+# key) — pass this explicitly via --pipeline-config, e.g.:
+#   .venv/bin/python -m stage2_rag_assistant.eval.run_eval \
+#       --pipeline-config stage2_rag_assistant/config/openrouter.yaml
+#
+# Requires OPENROUTER_API_KEY set in your environment before running —
+# never put the key in this file. See ../../.env.example.
+llm:
+  provider: openrouter
+  model: minimax/minimax-m3
+
+router:
+  # Real inference is slower than the fake client's instant return —
+  # bumped from default.yaml's 10s/32 tokens; the router only needs one
+  # word back (an intent label), so tokens stay small.
+  max_tokens: 32
+  timeout_s: 30.0
+
+generation:
+  max_tokens: 512
+  timeout_s: 60.0
+  max_retries: 1  # FR-9: one retry on malformed output, then fallback_insufficient_data
+
+fallback:
+  # Same placeholder as default.yaml — still not calibrated (M2c is a
+  # prototype on mock data; see calibration/tune_threshold.py).
+  tau: 0.6
+  high_severity_margin: 0.3
+
+kb:
+  db_path: stage2_rag_assistant/kb/kb.sqlite3
