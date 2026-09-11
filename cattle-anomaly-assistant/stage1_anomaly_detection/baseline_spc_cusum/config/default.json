@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "timezone": "America/Chicago",
+  "baseline_days": 7,
+  "coverage_minimum": 0.75,
+  "cusum_k": 0.5,
+  "cusum_h": 5.0
+}

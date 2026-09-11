@@ -1,10 +1,15 @@
-# M0 (shared schemas + mock generator) + M2a (KB + Stage 2 pipeline, fake LLM
-# client only) + M2b (Ragas Layer 2 eval harness, fake judge only). Stage 1
-# will add numpy/scikit-learn/torch when its code is ported in; a real LLM
-# SDK gets added once a provider is chosen (PRD Open Question 2). See
-# LLM_ASSISTANT_STATUS.md for status.
+# M0 (shared schemas + mock generator), Stage 1 (WASP behavior classifier +
+# MmCows CUSUM baseline, numpy/scikit-learn/xgboost), and Stage 2 through M2c
+# + a real OpenRouter LLM provider (ragas + pytest-asyncio for the eval
+# harness; no SDK needed for OpenRouter itself, it's stdlib urllib). Kept in
+# sync with pyproject.toml's own dependencies + `behavior`/`dev` extras —
+# `pip install -e '.[behavior,dev]'` is the equivalent editable install and
+# the one to prefer if it drifts again. See LLM_ASSISTANT_STATUS.md for status.
 pydantic>=2.5
-pytest>=8.0
-pytest-asyncio>=1.0
 pyyaml>=6.0
 ragas==0.4.3
+numpy>=1.26,<3
+scikit-learn>=1.4,<2
+xgboost>=2.0,<4
+pytest>=8.0
+pytest-asyncio>=1.0

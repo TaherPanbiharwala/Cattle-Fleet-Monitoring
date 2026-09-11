@@ -1,0 +1,76 @@
+{
+  "accuracy": 0.9887750122010737,
+  "class_metrics": {
+    "Grazing": {
+      "f1-score": 0.9929411764705882,
+      "precision": 0.9921630094043887,
+      "recall": 0.9937205651491365,
+      "support": 637.0
+    },
+    "Miscellaneous behaviors": {
+      "f1-score": 0.974025974025974,
+      "precision": 0.9900990099009901,
+      "recall": 0.9584664536741214,
+      "support": 313.0
+    },
+    "Resting": {
+      "f1-score": 0.995575221238938,
+      "precision": 0.995575221238938,
+      "recall": 0.995575221238938,
+      "support": 904.0
+    },
+    "Walking": {
+      "f1-score": 0.9674185463659147,
+      "precision": 0.946078431372549,
+      "recall": 0.9897435897435898,
+      "support": 195.0
+    },
+    "accuracy": 0.9887750122010737,
+    "macro avg": {
+      "f1-score": 0.9824902295253537,
+      "precision": 0.9809789179792164,
+      "recall": 0.9843764574514464,
+      "support": 2049.0
+    },
+    "weighted avg": {
+      "f1-score": 0.9887849076736204,
+      "precision": 0.9889673602768437,
+      "recall": 0.9887750122010737,
+      "support": 2049.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      193,
+      2,
+      0,
+      0
+    ],
+    [
+      4,
+      633,
+      0,
+      0
+    ],
+    [
+      1,
+      0,
+      900,
+      3
+    ],
+    [
+      6,
+      3,
+      4,
+      300
+    ]
+  ],
+  "macro_f1": 0.9824902295253537,
+  "mean_max_probability_uncalibrated": 0.9911099672317505,
+  "model_sha256": "79bfdde322a1602a2df10293a254c6c3242ad50cc5fbf6566303cb0bcdc29028",
+  "not_valid_for_collar_or_clinical_use": true,
+  "schema_version": 1,
+  "scope": "reference_only",
+  "split_protocol": "stratified random window split; not grouped by cow or recording",
+  "test_windows": 2049
+}
