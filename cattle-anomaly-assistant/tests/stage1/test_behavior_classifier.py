@@ -109,6 +109,12 @@ def test_existing_cusum_adapter_marks_current_public_data_ineligible() -> None:
         fuse_daily_records([_context("T01", "2023-08-01", deployment="mmcows-2023")], [adapted])
 
 
+def test_existing_cusum_adapter_accepts_detector_timestamp_and_converts_to_local_day() -> None:
+    raw = {"cow_id": "T01", "window_id": "T01:2023-08-01", "timestamp": "2023-08-01T00:00:00-05:00", "cbt_c": 38.5, "cbt_deviation_sigma": 1.0, "cbt_cusum_value": 5.0, "lying_time_pct_24h": 40.0, "lying_time_deviation_sigma": 0.0, "thi": 69.0, "activity_magnitude_deviation_sigma": None, "anomaly_flag": True, "anomaly_score": 0.5, "driving_signals": ["cbt"]}
+    adapted = adapt_cusum_window(raw, deployment_id="mmcows-2023", source_kind="mmcows_public", timezone="America/Chicago")
+    assert adapted["local_date"] == "2023-08-01"
+
+
 def _write_wasp_event(path: Path, *, label: str, cow: str, event: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
@@ -189,3 +195,68 @@ def test_cli_uses_json_error_and_refuses_legacy_pickle(tmp_path: Path, capsys: p
     assert main(["verify-artifact", "--model-path", str(pickle_path)]) == 2
     response = json.loads(capsys.readouterr().err)
     assert response["code"] == "LEGACY_PICKLE_REJECTED"
+
+
+@pytest.mark.skipif(__import__("importlib").util.find_spec("xgboost") is None, reason="behavior optional dependencies are not installed")
+def test_historical_demo_uses_active_25_channel_model_without_claiming_a_same_cow_join(tmp_path: Path) -> None:
+    import hashlib
+
+    import numpy as np
+    import xgboost as xgb
+
+    from stage1_anomaly_detection.behavior_classifier.historical_demo import (
+        CLASS_LABELS,
+        FEATURE_NAMES,
+        SENSOR_COLUMNS,
+        historical_behavior_summary,
+        historical_demo_anomaly_records,
+    )
+
+    model_path = tmp_path / "cow_behavior_xgboost_reference.json"
+    feature_matrix = np.vstack([np.full((4, len(FEATURE_NAMES)), label, dtype=np.float32) for label in range(4)])
+    labels = np.repeat(np.arange(4, dtype=np.int32), 4)
+    booster = xgb.train(
+        {"objective": "multi:softprob", "num_class": 4, "seed": 42},
+        xgb.DMatrix(feature_matrix, label=labels, feature_names=list(FEATURE_NAMES)),
+        num_boost_round=2,
+    )
+    booster.save_model(model_path)
+    model_hash = hashlib.sha256(model_path.read_bytes()).hexdigest()
+    manifest_path = tmp_path / "cow_behavior_xgboost_reference.manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "model_format": "native_xgboost_json",
+                "model_file": model_path.name,
+                "model_sha256": model_hash,
+                "feature_names": list(FEATURE_NAMES),
+                "feature_sha256": hashlib.sha256(json.dumps(list(FEATURE_NAMES), separators=(",", ":")).encode()).hexdigest(),
+                "sensor_columns": list(SENSOR_COLUMNS),
+                "class_labels": CLASS_LABELS,
+                "window_settings": {"sample_rate_hz": 10, "window_samples": 50, "stride_samples": 25},
+            }
+        ),
+        encoding="utf-8",
+    )
+    wasp = tmp_path / "wasp"
+    for class_number, directory in enumerate(CLASS_LABELS):
+        path = wasp / directory / f"{class_number}_{directory.replace(' ', '-')}_C01_20240801_000000.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["Time", *SENSOR_COLUMNS])
+            for row_number in range(50):
+                writer.writerow([f"2024-08-01T00:00:{row_number:02d}+00:00", *[class_number + column / 100 for column in range(len(SENSOR_COLUMNS))]])
+    behavior = historical_behavior_summary(wasp_dataset_dir=wasp, model_path=model_path, manifest_path=manifest_path)
+    assert behavior["model_sha256"] == model_hash
+    assert behavior["observed_windows"] == 4
+    assert behavior["source_kind"] == "wasp_public_historical_dataset"
+    raw_cusum = [{"cow_id": "T01", "window_id": "T01:2023-08-01", "date": "2023-08-01", "cbt_c": 38.5, "cbt_deviation_sigma": 1.0, "cbt_cusum_value": 5.0, "lying_time_pct_24h": 40.0, "lying_time_deviation_sigma": 0.0, "thi": 69.0, "activity_magnitude_deviation_sigma": None, "anomaly_flag": True, "anomaly_score": 0.5, "driving_signals": ["cbt"]}]
+    records = historical_demo_anomaly_records(raw_cusum, deployment_id="mmcows-public-2023", timezone="America/Chicago", behavior_summary=behavior)
+    assert records[0]["anomaly_score"] == 0.5
+    assert records[0]["driving_signals"] == ["cbt"]
+    assert records[0]["behavior_context_source"] == "wasp_public_historical_dataset"
+    assert records[0]["behavior_context_relation"] == "cross_dataset_historical_demo"
+    assert records[0]["behavior_model_sha256"] == model_hash
+    assert assemble(records[0], None).record.cow_id == "T01"

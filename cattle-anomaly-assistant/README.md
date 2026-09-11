@@ -81,6 +81,23 @@ For a future compatible deployment, the workflow is:
 
 Fusion copies the CUSUM flag, score, physiology values, and literal drivers unchanged. Behaviour is context only in this release: it does not alter the score or add `behavior_state` as a driver. Records use the end of the local day converted to UTC and retain the prior three successfully fused records for the same cow. The Stage 2 record assembler already consumes the resulting shared `AnomalyRecord` schema without a code change.
 
+### Historical dataset application mode
+
+The application can also run entirely from the public datasets already staged locally. `historical-demo-records` uses the active Kaggle 25-channel XGBoost JSON model to classify the public WASP recordings, then attaches the resulting **dataset-level historical behavior summary** to each independently-derived MmCows CUSUM `AnomalyRecord`.
+
+```bash
+.venv/bin/behavior-classifier historical-demo-records \
+  --wasp-dataset-dir /Users/taherpanbiharwala/Desktop/IoT/db-cow-walking \
+  --model-path /Users/taherpanbiharwala/Downloads/cow_behavior_xgboost_reference.json \
+  --manifest-path /Users/taherpanbiharwala/Downloads/cow_behavior_xgboost_reference.manifest.json \
+  --cusum-windows-jsonl /Users/taherpanbiharwala/Desktop/MmCows-anomaly-results/run-002-with-immu/anomaly_windows.jsonl \
+  --deployment-id mmcows-public-2023 \
+  --timezone America/Chicago \
+  --output-dir /Users/taherpanbiharwala/Desktop/MmCows-anomaly-results/historical-xgboost-demo-001
+```
+
+The output has `anomaly_records.jsonl`, `historical_behavior_summary.json`, and `summary.json`. It emits the flagged MmCows monitoring-day records (the current run has 11), because the seven baseline days deliberately have no CUSUM deviations and must not be imputed. Every record explicitly carries `behavior_context_source="wasp_public_historical_dataset"` and `behavior_context_relation="cross_dataset_historical_demo"`. This makes the behavior result visible to the application without claiming that a WASP behavior prediction belongs to a MmCows cow or date. CUSUM is still the only source of the anomaly flag, score, and drivers.
+
 ## M1b — MmCows daily personal-baseline detector
 
 `stage1_anomaly_detection.baseline_spc_cusum` reads only these MmCows wearable streams:

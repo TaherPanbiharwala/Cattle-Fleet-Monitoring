@@ -9,6 +9,8 @@ from pydantic import AwareDatetime, Field, model_validator
 from ._base import StrictModel
 
 BehaviorState = Literal["walking", "grazing", "resting", "miscellaneous"]
+BehaviorContextSource = Literal["same_cow_runtime", "wasp_public_historical_dataset"]
+BehaviorContextRelation = Literal["same_cow_day", "cross_dataset_historical_demo"]
 
 _DISTRIBUTION_SUM_TOLERANCE = 0.01
 
@@ -41,6 +43,9 @@ class AnomalyRecord(StrictModel):
     behavior_state: BehaviorState
     behavior_state_confidence: float = Field(ge=0, le=1)
     behavior_state_distribution_24h: BehaviorStateDistribution24h
+    behavior_context_source: BehaviorContextSource = "same_cow_runtime"
+    behavior_context_relation: BehaviorContextRelation = "same_cow_day"
+    behavior_model_sha256: str | None = Field(default=None, min_length=16)
 
     cbt_c: float
     cbt_deviation_sigma: float

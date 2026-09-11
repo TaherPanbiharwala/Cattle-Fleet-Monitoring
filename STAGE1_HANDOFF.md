@@ -23,7 +23,8 @@ The maintained implementation lives entirely below `cattle-anomaly-assistant/sta
 - `features.py` — 50-sample / 10 Hz windows with 25-sample stride and exactly 112 features.
 - `benchmark.py` — CPU XGBoost and nested LOCO evaluation.
 - `artifact.py` — native JSON-only save/load and manifest verification; no Python pickle support.
-- `context.py`, `runtime.py`, and `to_anomaly_record.py` — derived daily context and same-cow fusion contract.
+- `context.py` and `runtime.py` — derived daily context and same-cow fusion contract.
+- `historical_demo.py` — public-dataset application bridge using the active Kaggle 25-channel XGBoost JSON model and independently-derived MmCows CUSUM indicators.
 
 The older `src/dataset_adapters/wasp_lab.py` and `src/ml/*` remain historical references only. Do not import them, modify them, or copy their unsafe pickle serialization into this subproject.
 
@@ -46,6 +47,8 @@ The model emits derived per-window state/confidence and daily contexts with the 
 `behavior_state_confidence` is maximum softprob and therefore uncalibrated. The behavior state is contextual in M1d: it cannot change the existing CUSUM anomaly score or become a driver yet.
 
 WASP and MmCows cannot be joined, even though both are public cattle datasets. The fusion contract requires an exact `(cow_id, local_date, timezone, deployment_id)` match and `same_cow_runtime` provenance from both sources. It rejects public `wasp_public` / `mmcows_public` inputs before writing output. Test fixtures exercise the schema path; they are not a field-ready data source.
+
+For the public-data-only application mode, use `historical-demo-records` instead of `fuse-daily`. It runs the active Kaggle 25-channel XGBoost model over the staged WASP data and attaches its **dataset-level historical behavior summary** to flagged MmCows CUSUM records. The resulting `AnomalyRecord`s explicitly declare `behavior_context_source="wasp_public_historical_dataset"` and `behavior_context_relation="cross_dataset_historical_demo"`; they do not claim the behavior belongs to the MmCows cow/date. CUSUM remains the only source of the anomaly flag, score, and driving signals. See the assistant README for the command.
 
 ## 5. Commands and verification
 

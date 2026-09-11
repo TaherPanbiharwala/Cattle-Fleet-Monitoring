@@ -152,7 +152,16 @@ def adapt_cusum_window(record: dict[str, Any], *, deployment_id: str, source_kin
         fail("RUNTIME_CONTEXT_INVALID", "CUSUM source kind is unsupported.", source_kind=source_kind)
     date_value = record.get("date")
     if not isinstance(date_value, str):
-        fail("RUNTIME_CONTEXT_INVALID", "CUSUM rows must provide a local date.")
+        timestamp = record.get("timestamp")
+        if not isinstance(timestamp, str):
+            fail("RUNTIME_CONTEXT_INVALID", "CUSUM rows must provide a local date or an ISO-8601 timestamp.")
+        try:
+            parsed_timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            if parsed_timestamp.tzinfo is None:
+                raise ValueError("naive timestamp")
+            date_value = parsed_timestamp.astimezone(ZoneInfo(timezone)).date().isoformat()
+        except (ValueError, ZoneInfoNotFoundError):
+            fail("RUNTIME_CONTEXT_INVALID", "CUSUM timestamp or requested timezone is invalid.", timestamp=timestamp, timezone=timezone)
     return {
         "schema_version": SCHEMA_VERSION,
         "cow_id": record.get("cow_id"),

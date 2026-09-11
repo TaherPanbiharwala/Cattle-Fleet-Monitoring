@@ -12,6 +12,7 @@ from .artifact import legacy_pickle_provenance, verify_artifact
 from .benchmark import preflight, run_benchmark
 from .context import adapt_cusum_window, aggregate_daily_context, fuse_daily_records
 from .errors import BehaviorError, fail
+from .historical_demo import historical_behavior_summary, historical_demo_anomaly_records
 from .io import atomic_output_dir, read_jsonl, write_json, write_jsonl
 from .runtime import predict_runtime_windows
 
@@ -46,12 +47,28 @@ def build_parser() -> argparse.ArgumentParser:
     fusion_parser.add_argument("--timezone", required=True, help="IANA local timezone for legacy CUSUM rows.")
     fusion_parser.add_argument("--cusum-source-kind", choices=("same_cow_runtime", "mmcows_public"), default="mmcows_public", help="Current MmCows output is public and intentionally cannot be fused.")
     fusion_parser.add_argument("--output-dir", required=True, type=Path)
+    demo_parser = commands.add_parser("historical-demo-records", help="Use the active Kaggle XGBoost model on public WASP data and attach its labelled historical summary to public MmCows anomaly records.")
+    demo_parser.add_argument("--wasp-dataset-dir", required=True, type=Path, help="Public db-cow-walking folder with the four class directories.")
+    demo_parser.add_argument("--model-path", required=True, type=Path, help="The active Kaggle native XGBoost JSON model.")
+    demo_parser.add_argument("--manifest-path", required=True, type=Path, help="Manifest paired with the active Kaggle model.")
+    demo_parser.add_argument("--cusum-windows-jsonl", required=True, type=Path, help="Existing derived MmCows anomaly_windows.jsonl output.")
+    demo_parser.add_argument("--deployment-id", required=True, help="Identifier recorded with the historical MmCows output.")
+    demo_parser.add_argument("--timezone", required=True, help="IANA timezone used by the MmCows daily windows.")
+    demo_parser.add_argument("--output-dir", required=True, type=Path, help="New output directory for derived records only.")
     return parser
 
 
 def _publish_records(output_dir: Path, filename: str, records: list[dict[str, Any]], summary: dict[str, Any]) -> Path:
     def writer(temp_dir: Path) -> None:
         write_jsonl(temp_dir / filename, records)
+        write_json(temp_dir / "summary.json", summary)
+    return atomic_output_dir(output_dir, writer)
+
+
+def _publish_historical_demo(output_dir: Path, records: list[dict[str, Any]], behavior_summary: dict[str, Any], summary: dict[str, Any]) -> Path:
+    def writer(temp_dir: Path) -> None:
+        write_jsonl(temp_dir / "anomaly_records.jsonl", records)
+        write_json(temp_dir / "historical_behavior_summary.json", behavior_summary)
         write_json(temp_dir / "summary.json", summary)
     return atomic_output_dir(output_dir, writer)
 
@@ -91,6 +108,33 @@ def main(argv: list[str] | None = None) -> int:
             records = fuse_daily_records(contexts, cusums)
             published = _publish_records(args.output_dir, "anomaly_records.jsonl", records, {"schema_version": 1, "record_count": len(records), "behavior_context_only": True, "interpretation": "Mechanical anomaly indicators only; not a clinical or veterinary diagnosis.", "raw_sensor_rows_persisted": False})
             summary = {"status": "complete", "output_dir": str(published), "record_count": len(records), "behavior_context_only": True}
+        elif args.command == "historical-demo-records":
+            behavior_summary = historical_behavior_summary(
+                wasp_dataset_dir=args.wasp_dataset_dir,
+                model_path=args.model_path,
+                manifest_path=args.manifest_path,
+            )
+            records = historical_demo_anomaly_records(
+                read_jsonl(args.cusum_windows_jsonl),
+                deployment_id=args.deployment_id,
+                timezone=args.timezone,
+                behavior_summary=behavior_summary,
+            )
+            published = _publish_historical_demo(
+                args.output_dir,
+                records,
+                behavior_summary,
+                {
+                    "schema_version": 1,
+                    "record_count": len(records),
+                    "behavior_model_sha256": behavior_summary["model_sha256"],
+                    "behavior_context_source": "wasp_public_historical_dataset",
+                    "behavior_context_relation": "cross_dataset_historical_demo",
+                    "interpretation": "Historical public-dataset demonstration only. CUSUM anomaly scores remain mechanical indicators and behavior is displayed as independent historical model context, not a same-cow inference or diagnosis.",
+                    "raw_sensor_rows_persisted": False,
+                },
+            )
+            summary = {"status": "complete", "output_dir": str(published), "record_count": len(records), "behavior_model_sha256": behavior_summary["model_sha256"], "behavior_context_relation": "cross_dataset_historical_demo"}
         else:  # pragma: no cover - argparse enforces the command set
             fail("INVALID_ARGUMENTS", "Unknown behavior-classifier command.")
         print(json.dumps(summary, sort_keys=True, allow_nan=False))
