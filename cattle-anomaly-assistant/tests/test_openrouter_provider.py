@@ -51,6 +51,38 @@ def test_complete_sends_expected_request_and_parses_response(monkeypatch):
         {"role": "system", "content": "be helpful"},
         {"role": "user", "content": "Cow 7, is she ok?"},
     ]
+    assert call["body"]["reasoning"] == {"enabled": False}
+    assert call["body"]["provider"] == {"ignore": ["novita"]}
+
+
+def test_complete_disables_reasoning_to_avoid_empty_content(monkeypatch):
+    """Regression test for a real bug found running against the live API:
+    minimax-m3 (a reasoning model) spent its entire max_tokens budget on
+    hidden reasoning and returned content=None, finish_reason="length" —
+    see openrouter_provider.py's complete() for the fix and the raw
+    response that proved it."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    post_fn, calls = _scripted_post(200, _success_body())
+    client = OpenRouterLLMClient(model="minimax/minimax-m3", post_fn=post_fn)
+
+    client.complete(system_prompt="s", user_prompt="u", max_tokens=32, timeout_s=1.0)
+
+    assert calls[0]["body"]["reasoning"] == {"enabled": False}
+
+
+def test_complete_excludes_novita_backend(monkeypatch):
+    """Regression test for a second real finding: even with reasoning
+    disabled, OpenRouter's "novita" backend for minimax-m3 ignored the flag
+    and burned 1000+ tokens on hidden reasoning anyway (reproduced 2/2
+    times) — confirmed fixed by excluding it from routing (4/4 clean after,
+    on a different backend). See openrouter_provider.py's complete()."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    post_fn, calls = _scripted_post(200, _success_body())
+    client = OpenRouterLLMClient(model="minimax/minimax-m3", post_fn=post_fn)
+
+    client.complete(system_prompt="s", user_prompt="u", max_tokens=32, timeout_s=1.0)
+
+    assert calls[0]["body"]["provider"] == {"ignore": ["novita"]}
 
 
 def test_never_logs_or_leaks_the_api_key_into_the_request_body(monkeypatch):

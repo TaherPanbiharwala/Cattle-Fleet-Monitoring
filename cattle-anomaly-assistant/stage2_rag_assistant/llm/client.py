@@ -35,8 +35,19 @@ def complete_json(
     json.loads()s the result. Raises LLMOutputError on any failure — callers
     (intent_router, generator) own their own retry/fail-closed policy; this
     helper never retries.
+
+    The LLMClient Protocol's complete() is typed to always return str, but a
+    real network-backed provider can legitimately violate that — found live
+    against OpenRouter/minimax-m3: a reasoning model burning its whole
+    max_tokens budget on hidden "thinking" output returns content=None,
+    which the FakeLLMClient (always deterministic) never could. Treating
+    that as LLMOutputError rather than letting it crash as an AttributeError
+    is what lets FR-9's "one retry, then fallback_insufficient_data" apply
+    to a real provider's failure modes, not just malformed JSON.
     """
     raw = client.complete(system_prompt=system_prompt, user_prompt=user_prompt, max_tokens=max_tokens, timeout_s=timeout_s)
+    if not raw:
+        raise LLMOutputError(f"LLM returned an empty response: {raw!r}")
     text = _strip_code_fence(raw)
     try:
         parsed = json.loads(text)

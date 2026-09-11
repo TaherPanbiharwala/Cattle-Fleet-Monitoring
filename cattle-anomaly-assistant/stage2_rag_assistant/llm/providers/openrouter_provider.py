@@ -79,6 +79,33 @@ class OpenRouterLLMClient:
                     {"role": "user", "content": user_prompt},
                 ],
                 "max_tokens": max_tokens,
+                # Reasoning models (minimax-m3 included) spend max_tokens on
+                # hidden "thinking" output before ever writing the actual
+                # answer — confirmed live: a 32-token router call came back
+                # with finish_reason="length" and content=None, all 32 tokens
+                # spent on reasoning. router/intent_router.py and
+                # generator.py both want compact, deterministic JSON, never
+                # a reasoning transcript, so reasoning is disabled outright
+                # rather than just enlarging max_tokens (which only shifts
+                # where the same failure mode reappears on a harder prompt).
+                # OpenRouter's unified reasoning param is a documented no-op
+                # for models that don't support toggling it.
+                "reasoning": {"enabled": False},
+                # minimax-m3 is served by multiple backend providers behind
+                # OpenRouter's routing, and they don't all honor
+                # reasoning.enabled=false identically — confirmed live by
+                # reproducing the same generation prompt repeatedly: routed
+                # to "Novita", it burned 1000+ tokens on hidden reasoning
+                # regardless of the flag (content stayed None even at
+                # max_tokens=2000); routed to "Minimax" or "Venice", the
+                # flag worked as documented and reasoning_tokens was 0.
+                # Excluding the one confirmed non-compliant backend, rather
+                # than just enlarging max_tokens to survive it, avoids
+                # paying for and waiting on reasoning tokens the pipeline
+                # never wants. Revisit if the configured model changes —
+                # this is a minimax-m3-on-OpenRouter finding, not a general
+                # OpenRouter behavior.
+                "provider": {"ignore": ["novita"]},
             }
         ).encode("utf-8")
         headers = {
