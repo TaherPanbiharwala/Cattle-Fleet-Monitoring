@@ -46,28 +46,39 @@ def auto_fill_response_model(model_cls: type[BaseModel]) -> BaseModel:
     clearly-labeled limitation of running without a real judge.
     """
     hints = typing.get_type_hints(model_cls)
-    kwargs = {name: _auto_fill_value(hints.get(name, str)) for name in model_cls.model_fields}
+    kwargs = {name: _auto_fill_value(hints.get(name, str), field_name=name) for name in model_cls.model_fields}
     return model_cls(**kwargs)
 
 
-def _auto_fill_value(annotation):
+def _auto_fill_value(annotation, *, field_name: str | None = None):
     origin = getattr(annotation, "__origin__", None)
     args = getattr(annotation, "__args__", ())
 
     if annotation is float:
         return 0.7
     if annotation is int:
-        return 1
+        # A real bug, found comparing a live run's scores against ragas's
+        # own source: every 0/1 "verdict"-style int field this auto-filler
+        # sees across Faithfulness/ContextPrecision/ContextRecall uses
+        # 1="yes/positive" — but AnswerRelevancy's `noncommittal` field is
+        # the one exception, using 1="evasive/bad" and force-zeroing the
+        # WHOLE score whenever it's 1 (ragas/metrics/collections/
+        # answer_relevancy/metric.py: `score = cosine_sim.mean() *
+        # int(not all_noncommittal)`). The blanket default of 1 silently
+        # zeroed answer_relevancy on every single case since M2b, in every
+        # eval run — this one field needs the opposite default; every other
+        # int field keeps working exactly as before.
+        return 0 if field_name == "noncommittal" else 1
     if annotation is bool:
         return True
     if annotation is str:
         return "placeholder text"
     if origin is list:
         inner = args[0] if args else str
-        return [_auto_fill_value(inner)]
+        return [_auto_fill_value(inner, field_name=field_name)]
     if origin is typing.Union:
         non_none = [a for a in args if a is not type(None)]
-        return _auto_fill_value(non_none[0]) if non_none else None
+        return _auto_fill_value(non_none[0], field_name=field_name) if non_none else None
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
         return auto_fill_response_model(annotation)
     return "placeholder"
