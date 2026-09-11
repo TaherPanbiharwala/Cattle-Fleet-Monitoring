@@ -13,7 +13,7 @@ This is a self-contained subproject inside the larger `IoT` repo — its own `py
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt   # includes ragas — real weight (numpy/pandas/langchain-core/instructor)
-.venv/bin/python -m pytest tests/ -v        # 142/142, all against fake LLM/judge clients, zero API keys
+.venv/bin/python -m pytest tests/ -v        # 150/150, all against fake LLM/judge clients, zero API keys
 .venv/bin/python -m stage2_rag_assistant.kb.build_kb --overwrite   # build the local KB (gitignored, not needed for tests)
 .venv/bin/python -m stage2_rag_assistant.eval.run_eval             # run the Layer 2 eval, writes a report under eval/reports/
 .venv/bin/python -m stage2_rag_assistant.calibration.tune_threshold   # prototype tau bucketing, writes a report under calibration/reports/
