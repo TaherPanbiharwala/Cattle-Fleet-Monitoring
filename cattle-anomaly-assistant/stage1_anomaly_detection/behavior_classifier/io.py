@@ -11,7 +11,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from .errors import fail
+from .errors import BehaviorError, fail
 
 
 def sha256_file(path: Path) -> str:

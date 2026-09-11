@@ -8,6 +8,8 @@ from .anomaly_explanation_response import (
 from .anomaly_record import (
     AnomalyHistoryEntry,
     AnomalyRecord,
+    HistoricalBehaviorContext,
+    HISTORICAL_BEHAVIOR_DISCLAIMER,
     BehaviorState,
     BehaviorStateDistribution24h,
 )
@@ -18,6 +20,8 @@ __all__ = [
     "BehaviorState",
     "BehaviorStateDistribution24h",
     "AnomalyHistoryEntry",
+    "HistoricalBehaviorContext",
+    "HISTORICAL_BEHAVIOR_DISCLAIMER",
     "AnomalyExplanationQuery",
     "SubmittedBy",
     "AnomalyExplanationResponse",

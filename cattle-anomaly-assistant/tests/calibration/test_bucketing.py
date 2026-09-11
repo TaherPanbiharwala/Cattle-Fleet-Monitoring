@@ -162,6 +162,7 @@ def test_evaluate_case_never_exposes_stage1_output_shaped_fields():
     result = evaluate_case(case, response)
     assert set(result.model_dump().keys()) == {
         "case_id",
+        "scenario_id",
         "bucket",
         "confidence",
         "llm_asserts_anomaly",

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from shared.schemas import AnomalyRecord
+from shared.schemas import AnomalyRecord, HistoricalBehaviorContext
 
 from .context import CusumDailyResult, _model_rows, adapt_cusum_window
 from .errors import fail
@@ -28,6 +28,9 @@ MODEL_SCHEMA_VERSION = 1
 WINDOW_SAMPLES = 50
 WINDOW_STRIDE_SAMPLES = 25
 SAMPLE_RATE_HZ = 10
+EXPECTED_SAMPLE_PERIOD_S = 1 / SAMPLE_RATE_HZ
+SAMPLE_PERIOD_TOLERANCE_S = 0.02
+PREDICTION_BATCH_WINDOWS = 512
 SENSOR_COLUMNS = (
     "BNO055_ARX", "BNO055_ARY", "BNO055_ARZ",
     "BNO055_AX", "BNO055_AY", "BNO055_AZ",
@@ -131,25 +134,100 @@ def _event_paths(dataset_dir: Path) -> list[Path]:
     return paths
 
 
-def _event_windows(path: Path) -> list[list[list[float]]]:
+def _parse_timestamp(value: str | None) -> datetime:
+    """Parse a WASP recording-clock timestamp.
+
+    The public files use ISO date-times without an offset (for example
+    ``2024-05-15 13:04:17.0``). They are used only for within-file cadence
+    validation, never for an MmCows join or output timestamp, so a consistent
+    naive recording clock is valid. A file may not mix naive and aware values.
+    """
+
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("missing timestamp")
+    parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    return parsed
+
+
+def _windows_from_segment(segment: list[list[float]]) -> list[list[list[float]]]:
+    return [segment[index : index + WINDOW_SAMPLES] for index in range(0, len(segment) - WINDOW_SAMPLES + 1, WINDOW_STRIDE_SAMPLES)]
+
+
+def _event_windows(path: Path) -> tuple[list[list[list[float]]], dict[str, int]]:
+    """Return only complete cadence-valid windows plus derived exclusion counts.
+
+    A malformed/non-monotonic/gapped timestamp ends the current segment.  Its
+    source values never reach an output artifact and a later valid segment can
+    still be used, which is safer than silently bridging an invalid cadence.
+    """
+
     try:
         with path.open(encoding="utf-8", newline="") as handle:
             reader = csv.DictReader(handle)
             missing = [name for name in ("Time", *SENSOR_COLUMNS) if name not in (reader.fieldnames or [])]
             if missing:
                 fail("WASP_LAYOUT_INVALID", "Historical WASP CSV is missing required columns.", path=str(path), missing=missing)
-            rows: list[list[float]] = []
+            windows: list[list[list[float]]] = []
+            segment: list[list[float]] = []
+            previous_timestamp: datetime | None = None
+            timestamp_awareness: bool | None = None
+            source_rows = 0
+            valid_rows = 0
+            timestamp_breaks = 0
+            cadence_breaks = 0
+            short_segment_rows = 0
+
+            def flush_segment() -> None:
+                nonlocal short_segment_rows
+                if segment:
+                    windows.extend(_windows_from_segment(segment))
+                    if len(segment) < WINDOW_SAMPLES:
+                        short_segment_rows += len(segment)
+                    segment.clear()
+
             for row_number, row in enumerate(reader, start=2):
+                source_rows += 1
                 try:
                     values = [float(row[name]) for name in SENSOR_COLUMNS]
                 except (TypeError, ValueError):
                     fail("WASP_LAYOUT_INVALID", "Historical WASP sensor value is not numeric.", path=str(path), row=row_number)
                 if not all(math.isfinite(value) for value in values):
                     fail("WASP_LAYOUT_INVALID", "Historical WASP sensor value is not finite.", path=str(path), row=row_number)
-                rows.append(values)
+                try:
+                    timestamp = _parse_timestamp(row.get("Time"))
+                except ValueError:
+                    flush_segment()
+                    previous_timestamp = None
+                    timestamp_awareness = None
+                    timestamp_breaks += 1
+                    continue
+                is_aware = timestamp.tzinfo is not None and timestamp.utcoffset() is not None
+                if previous_timestamp is not None:
+                    if timestamp_awareness != is_aware:
+                        flush_segment()
+                        timestamp_breaks += 1
+                    else:
+                        interval_s = (timestamp - previous_timestamp).total_seconds()
+                        if interval_s <= 0:
+                            flush_segment()
+                            timestamp_breaks += 1
+                        elif abs(interval_s - EXPECTED_SAMPLE_PERIOD_S) > SAMPLE_PERIOD_TOLERANCE_S:
+                            flush_segment()
+                            cadence_breaks += 1
+                segment.append(values)
+                previous_timestamp = timestamp
+                timestamp_awareness = is_aware
+                valid_rows += 1
+            flush_segment()
     except OSError as exc:
         fail("WASP_LAYOUT_INVALID", "Historical WASP CSV could not be read.", path=str(path), error=str(exc))
-    return [rows[index : index + WINDOW_SAMPLES] for index in range(0, len(rows) - WINDOW_SAMPLES + 1, WINDOW_STRIDE_SAMPLES)]
+    return windows, {
+        "source_rows": source_rows,
+        "valid_rows": valid_rows,
+        "timestamp_breaks": timestamp_breaks,
+        "cadence_breaks": cadence_breaks,
+        "short_segment_rows": short_segment_rows,
+    }
 
 
 def _features(windows: list[list[list[float]]]) -> Any:
@@ -166,37 +244,66 @@ def _features(windows: list[list[list[float]]]) -> Any:
     return features
 
 
+def _source_sha256(paths: list[Path], root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in paths:
+        digest.update(path.relative_to(root).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(sha256_file(path).encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
 def historical_behavior_summary(*, wasp_dataset_dir: Path, model_path: Path, manifest_path: Path) -> dict[str, Any]:
     """Classify the staged public WASP data with the user's active Kaggle model."""
 
     numpy, xgboost = _numpy_xgboost()
     booster, manifest = _load_booster(model_path, manifest_path)
-    windows: list[list[list[float]]] = []
     paths = _event_paths(wasp_dataset_dir)
+    root = wasp_dataset_dir.expanduser().resolve()
+    counts: Counter[str] = Counter()
+    confidence_sums: Counter[str] = Counter()
+    window_count = 0
+    exclusion_counts: Counter[str] = Counter()
     for path in paths:
-        windows.extend(_event_windows(path))
-    if not windows:
+        windows, diagnostics = _event_windows(path)
+        exclusion_counts.update(diagnostics)
+        for start in range(0, len(windows), PREDICTION_BATCH_WINDOWS):
+            batch = windows[start : start + PREDICTION_BATCH_WINDOWS]
+            probabilities = booster.predict(xgboost.DMatrix(_features(batch), feature_names=list(FEATURE_NAMES)))
+            if probabilities.shape != (len(batch), 4) or not numpy.isfinite(probabilities).all() or not numpy.allclose(probabilities.sum(axis=1), 1.0, atol=1e-6):
+                fail("HISTORICAL_MODEL_INVALID", "Historical behavior prediction output has an invalid probability shape or sum.")
+            indexes = probabilities.argmax(axis=1)
+            for row, index in enumerate(indexes):
+                state = INDEX_TO_STATE[int(index)]
+                counts[state] += 1
+                confidence_sums[state] += float(probabilities[row, index])
+            window_count += len(batch)
+    if not window_count:
         fail("WASP_LAYOUT_INVALID", "Historical WASP recordings contain no complete 50-sample windows.")
-    probabilities = booster.predict(xgboost.DMatrix(_features(windows), feature_names=list(FEATURE_NAMES)))
-    if probabilities.shape != (len(windows), 4) or not numpy.isfinite(probabilities).all() or not numpy.allclose(probabilities.sum(axis=1), 1.0, atol=1e-6):
-        fail("HISTORICAL_MODEL_INVALID", "Historical behavior prediction output has an invalid probability shape or sum.")
-    indexes = probabilities.argmax(axis=1)
-    states = [INDEX_TO_STATE[int(index)] for index in indexes]
-    counts = Counter(states)
     highest = max(counts.values())
     state = min(name for name, count in counts.items() if count == highest)
-    winner_confidences = [float(probabilities[row, index]) for row, index in enumerate(indexes) if INDEX_TO_STATE[int(index)] == state]
     return {
         "schema_version": 1,
         "source_kind": "wasp_public_historical_dataset",
         "context_relation": "cross_dataset_historical_demo",
         "model_file": model_path.expanduser().resolve().name,
         "model_sha256": manifest["model_sha256"],
+        "manifest_sha256": sha256_file(manifest_path.expanduser().resolve()),
         "behavior_state": state,
-        "behavior_state_confidence": sum(winner_confidences) / len(winner_confidences),
-        "behavior_state_distribution": {name: counts[name] / len(states) for name in ("walking", "grazing", "resting", "miscellaneous")},
-        "observed_windows": len(states),
+        "behavior_state_confidence": confidence_sums[state] / counts[state],
+        "behavior_state_distribution": {name: counts[name] / window_count for name in ("walking", "grazing", "resting", "miscellaneous")},
+        "observed_windows": window_count,
         "source_csv_files": len(paths),
+        "source_sha256": _source_sha256(paths, root),
+        "window_exclusions": {
+            "source_rows": exclusion_counts["source_rows"],
+            "valid_rows": exclusion_counts["valid_rows"],
+            "timestamp_breaks": exclusion_counts["timestamp_breaks"],
+            "cadence_breaks": exclusion_counts["cadence_breaks"],
+            "short_segment_rows": exclusion_counts["short_segment_rows"],
+        },
+        "prediction_batch_windows": PREDICTION_BATCH_WINDOWS,
         "confidence_kind": "uncalibrated_max_class_probability",
         "raw_sensor_rows_persisted": False,
         "interpretation": "Historical WASP behavior summary from the active XGBoost model. It is displayed beside, not joined to, independent MmCows anomaly indicators.",
@@ -216,19 +323,29 @@ def historical_demo_anomaly_records(
         zone = ZoneInfo(timezone)
     except ZoneInfoNotFoundError:
         fail("RUNTIME_CONTEXT_INVALID", "--timezone must be a valid IANA timezone.", timezone=timezone)
-    flagged_windows = [row for row in cusum_window_records if row.get("anomaly_flag") is True]
-    if not flagged_windows:
-        fail("NO_JOINABLE_RECORDS", "No flagged CUSUM anomaly windows were supplied for historical application records.")
-    normalized = [adapt_cusum_window(row, deployment_id=deployment_id, source_kind="mmcows_public", timezone=timezone) for row in flagged_windows]
+    normalized = [adapt_cusum_window(row, deployment_id=deployment_id, source_kind="mmcows_public", timezone=timezone) for row in cusum_window_records]
     cusums = _model_rows(normalized, CusumDailyResult, error_code="RUNTIME_CONTEXT_INVALID")
     if not cusums:
         fail("NO_JOINABLE_RECORDS", "No CUSUM daily windows were supplied.")
-    distribution = behavior_summary.get("behavior_state_distribution")
-    state = behavior_summary.get("behavior_state")
-    confidence = behavior_summary.get("behavior_state_confidence")
     model_hash = behavior_summary.get("model_sha256")
-    if not isinstance(distribution, dict) or not isinstance(state, str) or not isinstance(confidence, float) or not isinstance(model_hash, str):
+    manifest_hash = behavior_summary.get("manifest_sha256")
+    if not isinstance(model_hash, str) or not isinstance(manifest_hash, str):
         fail("HISTORICAL_MODEL_INVALID", "Historical behavior summary does not meet the AnomalyRecord behavior-context contract.")
+    try:
+        historical_context = HistoricalBehaviorContext(
+            source_kind=behavior_summary.get("source_kind"),
+            context_relation=behavior_summary.get("context_relation"),
+            model_sha256=model_hash,
+            manifest_sha256=manifest_hash,
+            behavior_state=behavior_summary.get("behavior_state"),
+            behavior_state_confidence=behavior_summary.get("behavior_state_confidence"),
+            behavior_state_distribution=behavior_summary.get("behavior_state_distribution"),
+            observed_windows=behavior_summary.get("observed_windows"),
+            source_csv_files=behavior_summary.get("source_csv_files"),
+            confidence_kind=behavior_summary.get("confidence_kind"),
+        )
+    except Exception as exc:
+        fail("HISTORICAL_MODEL_INVALID", "Historical behavior summary does not meet the AnomalyRecord historical-context contract.", error=str(exc))
     history_by_cow: dict[str, list[dict[str, Any]]] = defaultdict(list)
     output: list[dict[str, Any]] = []
     for cusum in sorted(cusums, key=lambda row: (row.cow_id, row.local_date, row.window_id)):
@@ -241,12 +358,13 @@ def historical_demo_anomaly_records(
             cow_id=cusum.cow_id,
             timestamp=timestamp,
             window_id=cusum.window_id,
-            behavior_state=state,
-            behavior_state_confidence=confidence,
-            behavior_state_distribution_24h=distribution,
+            behavior_state=None,
+            behavior_state_confidence=None,
+            behavior_state_distribution_24h=None,
             behavior_context_source="wasp_public_historical_dataset",
             behavior_context_relation="cross_dataset_historical_demo",
             behavior_model_sha256=model_hash,
+            historical_behavior_context=historical_context,
             cbt_c=cusum.cbt_c,
             cbt_deviation_sigma=cusum.cbt_deviation_sigma,
             cbt_cusum_value=cusum.cbt_cusum_value,
@@ -260,7 +378,11 @@ def historical_demo_anomaly_records(
             driving_signals=list(cusum.driving_signals),
             recent_anomaly_history=history_by_cow[cusum.cow_id][-3:],
         )
-        dumped = record.model_dump(mode="json")
+        # Cross-dataset records deliberately omit the ordinary cow-day
+        # behaviour field names altogether. A JSON ``null`` still invites a
+        # downstream consumer to treat them as a missing measurement, while
+        # absence makes the public-data boundary unambiguous.
+        dumped = record.model_dump(mode="json", exclude_none=True)
         output.append(dumped)
         history_by_cow[cusum.cow_id].append({"timestamp": dumped["timestamp"], "flag": dumped["anomaly_flag"], "driving_signals": dumped["driving_signals"]})
     return output

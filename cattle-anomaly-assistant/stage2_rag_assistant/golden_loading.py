@@ -1,23 +1,33 @@
-"""Shared golden-set loading, used by both stage2_rag_assistant/eval/ and
-stage2_rag_assistant/calibration/ — lives here, not nested under either,
-since both depend on it equally and neither should own it.
+"""Shared loading for the derived historical evaluation corpus.
 
-real_cases.jsonl / injected_cases.jsonl (PRD Section 13's proposed tree)
-are deliberately not created — they need real Stage 1 output that doesn't
-exist yet (PRD Section 14's Integration Point). Pointing this at a
-nonexistent file fails loudly rather than silently reporting "0 cases" as
-if that were a legitimate result.
+The default corpus is deliberately external to Git because it contains
+provenance tied to a user's staged derived Stage 1 outputs.  Callers either
+pass its three JSONL files explicitly or set ``HISTORICAL_GOLDEN_DIR`` after
+building it.  Missing files fail loudly rather than silently becoming an
+empty evaluation.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 
 from shared.schemas import AnomalyExplanationQuery, GoldenCase
 
 _GOLDEN_DIR = Path(__file__).parent / "eval" / "golden"
-DEFAULT_GOLDEN_FILES = [_GOLDEN_DIR / "mock_derived_cases.jsonl", _GOLDEN_DIR / "adversarial_cases.jsonl"]
+
+
+def default_golden_files() -> list[Path]:
+    """Return the user-built 24 real + 24 injected + 7 adversarial corpus."""
+
+    root = Path(os.environ.get("HISTORICAL_GOLDEN_DIR", _GOLDEN_DIR / "historical-built"))
+    return [root / "real_cases.jsonl", root / "injected_cases.jsonl", root / "adversarial_cases.jsonl"]
+
+
+# Kept as a constant import surface for existing CLI modules. Environment
+# selection intentionally happens only when the process imports this module.
+DEFAULT_GOLDEN_FILES = default_golden_files()
 
 
 def load_cases(paths: list[Path]) -> list[GoldenCase]:
@@ -25,9 +35,9 @@ def load_cases(paths: list[Path]) -> list[GoldenCase]:
     for path in paths:
         if not path.exists():
             raise FileNotFoundError(
-                f"{path} does not exist. real_cases.jsonl/injected_cases.jsonl need real Stage 1 output "
-                "(PRD Section 14 Integration Point) and are deliberately not created yet — see "
-                "LLM_ASSISTANT_STATUS.md before assuming this is a bug."
+                f"{path} does not exist. Build the derived 24 real + 24 injected + 7 adversarial corpus with "
+                "stage2_rag_assistant.eval.build_historical_golden_cases, then pass all three files with "
+                "--golden-file or set HISTORICAL_GOLDEN_DIR."
             )
         with path.open() as f:
             cases.extend(GoldenCase.model_validate_json(line) for line in f if line.strip())

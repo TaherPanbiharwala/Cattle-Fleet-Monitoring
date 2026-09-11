@@ -23,9 +23,13 @@ MARGIN = 0.3
 # every case, so the router never runs — only the generator's calls are
 # scripted here, keyed by cow_id parsed out of its user_prompt.
 _SCRIPT = {
+    "cow-02": (0.85, True),
     "cow-01": (0.85, True),  # agree, confident stage1 -> llm_grounded, bucket 0.8-0.9, correct
+    "cow-04": (0.85, True),
     "cow-03": (0.85, False),  # disagree, stage1 NOT confident (score 0.55) -> not high-severity -> llm_grounded, incorrect
+    "cow-06": (0.85, True),
     "cow-05": (0.45, True),  # agree, but confidence < tau -> fallback_stage1_output, excluded
+    "cow-08": (0.85, True),
     "cow-07": (0.65, False),  # agree (both False), confident stage1 -> llm_grounded, bucket 0.6-0.7, correct
 }
 
@@ -111,8 +115,8 @@ def test_calibration_split_sizes_and_exclusion(tmp_kb_db, fake_llm_client, tmp_p
 
     assert report["total_golden_cases"] == 8
     assert report["calibration_split_size"] == 4
-    assert report["test_split_size"] == 4
-    assert set(report["test_split_case_ids"]) == {"case-02", "case-04", "case-06", "case-08"}
+    assert report["held_out_split_size"] == 4
+    assert set(case_id.removeprefix("legacy:") for case_id in report["held_out_scenario_ids"]) == {"case-02", "case-04", "case-06", "case-08"}
     assert report["excluded_by_path_taken"] == {"fallback_stage1_output": 1}
 
 
@@ -144,15 +148,21 @@ def test_report_has_fixed_keys_with_no_stage1_accuracy_field(tmp_kb_db, fake_llm
         "scope_note",
         "demo_mode",
         "demo_mode_banner",
-        "current_config_tau",
+        "configured_tau",
+        "tau_policy",
         "total_golden_cases",
         "calibration_split_size",
-        "test_split_size",
-        "test_split_case_ids",
+        "held_out_split_size",
+        "calibration_scenario_ids",
+        "held_out_scenario_ids",
         "excluded_by_path_taken",
+        "held_out_excluded_by_path_taken",
         "bucket_stats",
         "overall_llm_accuracy",
+        "held_out_workflow_result",
+        "raw_pre_gate",
         "per_case",
+        "held_out_per_case",
         "_json_path",
         "_md_path",
     }
@@ -161,6 +171,7 @@ def test_report_has_fixed_keys_with_no_stage1_accuracy_field(tmp_kb_db, fake_llm
     for case_row in report["per_case"]:
         assert set(case_row.keys()) == {
             "case_id",
+            "scenario_id",
             "bucket",
             "confidence",
             "llm_asserts_anomaly",
@@ -177,7 +188,7 @@ def test_report_files_are_written(tmp_kb_db, fake_llm_client, tmp_path):
     assert json_path.exists() and json_path.parent == tmp_path / "reports"
     assert md_path.exists()
     assert json.loads(json_path.read_text())["calibration_split_size"] == 4
-    assert "steps 1-3" in md_path.read_text().lower()
+    assert "scenario-held-out" in md_path.read_text().lower()
 
 
 def test_run_never_writes_near_the_real_config(tmp_kb_db, fake_llm_client, tmp_path):

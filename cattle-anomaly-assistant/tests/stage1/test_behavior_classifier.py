@@ -246,8 +246,9 @@ def test_historical_demo_uses_active_25_channel_model_without_claiming_a_same_co
         with path.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.writer(handle)
             writer.writerow(["Time", *SENSOR_COLUMNS])
+            start = datetime(2024, 8, 1, tzinfo=timezone.utc)
             for row_number in range(50):
-                writer.writerow([f"2024-08-01T00:00:{row_number:02d}+00:00", *[class_number + column / 100 for column in range(len(SENSOR_COLUMNS))]])
+                writer.writerow([(start + timedelta(seconds=row_number / 10)).isoformat(), *[class_number + column / 100 for column in range(len(SENSOR_COLUMNS))]])
     behavior = historical_behavior_summary(wasp_dataset_dir=wasp, model_path=model_path, manifest_path=manifest_path)
     assert behavior["model_sha256"] == model_hash
     assert behavior["observed_windows"] == 4
@@ -259,4 +260,8 @@ def test_historical_demo_uses_active_25_channel_model_without_claiming_a_same_co
     assert records[0]["behavior_context_source"] == "wasp_public_historical_dataset"
     assert records[0]["behavior_context_relation"] == "cross_dataset_historical_demo"
     assert records[0]["behavior_model_sha256"] == model_hash
+    assert "behavior_state" not in records[0]
+    assert "behavior_state_confidence" not in records[0]
+    assert "behavior_state_distribution_24h" not in records[0]
+    assert records[0]["historical_behavior_context"]["model_sha256"] == model_hash
     assert assemble(records[0], None).record.cow_id == "T01"

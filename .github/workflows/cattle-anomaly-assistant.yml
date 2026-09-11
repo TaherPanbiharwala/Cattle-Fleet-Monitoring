@@ -1,0 +1,37 @@
+name: Cattle anomaly assistant offline tests
+
+on:
+  push:
+    paths:
+      - "cattle-anomaly-assistant/**"
+      - "LLM_ASSISTANT_STATUS.md"
+      - "STAGE1_HANDOFF.md"
+      - "STAGE1_ANOMALY_BASELINE_HANDOFF.md"
+      - ".github/workflows/cattle-anomaly-assistant.yml"
+  pull_request:
+    paths:
+      - "cattle-anomaly-assistant/**"
+      - "LLM_ASSISTANT_STATUS.md"
+      - "STAGE1_HANDOFF.md"
+      - "STAGE1_ANOMALY_BASELINE_HANDOFF.md"
+      - ".github/workflows/cattle-anomaly-assistant.yml"
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    defaults:
+      run:
+        working-directory: cattle-anomaly-assistant
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e '.[behavior,dev]'
+      - run: python -m pytest tests/ -q

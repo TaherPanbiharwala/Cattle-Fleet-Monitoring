@@ -6,7 +6,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from shared.schemas import AnomalyExplanationResponse, AnomalyRecord, Stage1OutputSummary
+from shared.schemas import (
+    HISTORICAL_BEHAVIOR_DISCLAIMER,
+    AnomalyExplanationResponse,
+    AnomalyRecord,
+    Stage1OutputSummary,
+)
 from stage2_rag_assistant.pipeline.fallback_gate import GateDecision
 from stage2_rag_assistant.pipeline.generator import GeneratedContent
 from stage2_rag_assistant.pipeline.retriever import RetrievalResult
@@ -30,6 +35,9 @@ def _base_kwargs(query_id: str, cow_id: str, record: AnomalyRecord, *, model_ver
         latency_ms=latency_ms,
         model_version=model_version,
         timestamp=datetime.now(timezone.utc),
+        historical_context_disclaimer=(
+            HISTORICAL_BEHAVIOR_DISCLAIMER if record.historical_behavior_context is not None else None
+        ),
     )
 
 

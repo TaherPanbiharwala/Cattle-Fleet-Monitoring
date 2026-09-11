@@ -1,14 +1,13 @@
-"""Pure computation for PRD Section 10's calibration steps 1-3: split,
-bucket, reconstruct, aggregate. Zero I/O, zero pipeline execution — see
-tune_threshold.py for the runner that actually drives the pipeline.
+"""Pure computation for the historical scenario-grouped workflow report.
 
-Steps 4-6 (Stage 1's own accuracy, setting tau, re-validating on the test
-split) are explicitly out of scope here and need real Stage 1 output —
-see tune_threshold.py's module docstring for why step 4 isn't computed
-even though it's technically possible on the current mock golden set.
+This module splits whole scenario families, buckets uncalibrated LLM
+confidence, and reports a held-out workflow slice. It never computes a
+clinical calibration or a CUSUM detection-accuracy result.
 """
 
 from __future__ import annotations
+
+from collections import defaultdict
 
 from shared.schemas import AnomalyExplanationResponse, GoldenCase
 from shared.schemas._base import StrictModel
@@ -17,17 +16,20 @@ NUM_BUCKETS = 10
 
 
 def split_calibration_test(cases: list[GoldenCase]) -> tuple[list[GoldenCase], list[GoldenCase]]:
-    """Deterministic, no RNG — case order carries no meaning worth
-    preserving via randomness. Sorts by case_id, then interleaves by
-    parity (even index -> calibration, odd -> test) rather than a
-    contiguous head/tail split: the real golden set's case_ids cluster
-    alphabetically by category ("adv-..." block, then "mock-<category>-
-    00/01/02" triplets), so a contiguous split would dump whole
-    categories on one side by alphabetical accident. Interleaving
-    distributes each cluster close to evenly instead.
+    """Split whole injection scenarios deterministically, never their days.
+
+    Repeated days from a sustained injected shift share a scenario and would
+    leak the same constructed pattern across calibration/test if split by
+    individual case.  Legacy fixtures without a scenario id remain readable
+    by treating each old case as its own scenario.
     """
-    ordered = sorted(cases, key=lambda c: c.case_id)
-    return ordered[0::2], ordered[1::2]
+    groups: dict[str, list[GoldenCase]] = defaultdict(list)
+    for case in cases:
+        groups[case.scenario_id or f"legacy:{case.case_id}"].append(case)
+    ordered_groups = [groups[key] for key in sorted(groups)]
+    calibration = [case for group in ordered_groups[0::2] for case in group]
+    test = [case for group in ordered_groups[1::2] for case in group]
+    return sorted(calibration, key=lambda case: case.case_id), sorted(test, key=lambda case: case.case_id)
 
 
 def bucket_label(confidence: float) -> str:
@@ -51,9 +53,9 @@ def reconstruct_llm_asserts_anomaly(response: AnomalyExplanationResponse) -> boo
     evaluate_case below).
 
     Reads stage1_output.anomaly_flag only to fold it into this XOR.
-    Nothing downstream may separately compare stage1_output.anomaly_flag
-    against a case's gold_anomaly_flag — that's PRD Section 10 step 4
-    ("Stage 1's own accuracy"), explicitly out of scope here.
+    Nothing downstream may reinterpret this as a CUSUM accuracy measurement:
+    the historical real cases are mechanical workflow indicators and the
+    injection cases are deterministic detector checks, not health truth.
     """
     return response.stage1_output.anomaly_flag != response.disagreement_flag
 
@@ -65,6 +67,7 @@ class CalibrationCaseResult(StrictModel):
     """
 
     case_id: str
+    scenario_id: str
     bucket: str
     confidence: float
     llm_asserts_anomaly: bool
@@ -83,6 +86,7 @@ def evaluate_case(case: GoldenCase, response: AnomalyExplanationResponse) -> Cal
     llm_asserts_anomaly = reconstruct_llm_asserts_anomaly(response)
     return CalibrationCaseResult(
         case_id=case.case_id,
+        scenario_id=case.scenario_id or f"legacy:{case.case_id}",
         bucket=bucket_label(response.confidence),
         confidence=response.confidence,
         llm_asserts_anomaly=llm_asserts_anomaly,

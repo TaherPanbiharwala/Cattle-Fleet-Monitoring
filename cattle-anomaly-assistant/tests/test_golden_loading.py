@@ -40,10 +40,11 @@ def test_load_cases_raises_loudly_on_missing_file(tmp_path):
         load_cases([missing])
 
 
-def test_load_default_golden_files_returns_all_24_real_cases():
-    cases = load_cases(DEFAULT_GOLDEN_FILES)
-    assert len(cases) == 24
-    assert all(isinstance(c, GoldenCase) for c in cases)
+def test_default_golden_files_require_user_built_historical_corpus():
+    names = [path.name for path in DEFAULT_GOLDEN_FILES]
+    assert names == ["real_cases.jsonl", "injected_cases.jsonl", "adversarial_cases.jsonl"]
+    with pytest.raises(FileNotFoundError, match="build_historical_golden_cases"):
+        load_cases(DEFAULT_GOLDEN_FILES)
 
 
 def test_load_cases_validates_each_line(tmp_path):

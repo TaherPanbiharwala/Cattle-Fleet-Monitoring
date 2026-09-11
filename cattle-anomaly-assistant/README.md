@@ -20,8 +20,8 @@ If anything importing `ragas` fails on a fresh install, read [`stage2_rag_assist
 
 ```bash
 .venv/bin/python -m stage2_rag_assistant.kb.build_kb --overwrite   # build the local KB (gitignored, not needed for tests)
-.venv/bin/python -m stage2_rag_assistant.eval.run_eval             # run the Layer 2 eval, writes a report under eval/reports/
-.venv/bin/python -m stage2_rag_assistant.calibration.tune_threshold   # prototype tau bucketing, writes a report under calibration/reports/
+# Build the external historical evaluation corpus with the documented command below.
+# Then pass all three JSONL files explicitly to run_eval or tune_threshold.
 ```
 
 ### Running against a real LLM (OpenRouter)
@@ -31,71 +31,33 @@ If anything importing `ragas` fails on a fresh install, read [`stage2_rag_assist
 ```bash
 cp .env.example .env   # then fill in OPENROUTER_API_KEY yourself — never commit this file
 set -a && source .env && set +a
-.venv/bin/python -m stage2_rag_assistant.eval.run_eval --pipeline-config stage2_rag_assistant/config/openrouter.yaml
-.venv/bin/python -m stage2_rag_assistant.calibration.tune_threshold --pipeline-config stage2_rag_assistant/config/openrouter.yaml
+historical-anomaly-rag --help
 ```
+
+PowerShell: `$env:OPENROUTER_API_KEY = "..."`. The historical application is the only command in this project that performs paid OpenRouter calls; its `preflight` command is read-only and offline.
 
 See [`stage2_rag_assistant/config/openrouter.yaml`](stage2_rag_assistant/config/openrouter.yaml) and [`stage2_rag_assistant/llm/providers/openrouter_provider.py`](stage2_rag_assistant/llm/providers/openrouter_provider.py). This only wires the main Stage 2 pipeline's generation/routing calls — the Ragas eval judge (`eval/ragas_llm.py`) is a separate, still-deferred decision (real judging would mean a real paid API call per metric per golden case).
 
 ## Layout
 
 - `shared/schemas/` — the frozen `AnomalyRecord` / `AnomalyExplanationQuery` / `AnomalyExplanationResponse` / `GoldenCase` pydantic models (PRD Section 6), all inheriting a `StrictModel` base (`extra="forbid"`, `AwareDatetime` timestamps). Both stages import from here; never duplicate a model.
-- `stage1_anomaly_detection/` — see the M1a–M1d sections below for `behavior_classifier/` (WASP six-axis benchmark + the accepted external reference model) and `baseline_spc_cusum/` (MmCows CUSUM baseline + injection harness); `to_anomaly_record.py` is the fusion entry point.
+- `stage1_anomaly_detection/` — the pinned friend XGBoost historical model lives in `behavior_classifier/reference_model/`; MmCows CUSUM and its injection harness are under `baseline_spc_cusum/`.
 - `stage2_rag_assistant/mock/generate_mock_records.py` — produces schema-valid mock `AnomalyRecord`s so Stage 2 could be built before Stage 1 exists (PRD Section 6.2). The real Stage 1 output to swap in at the Integration Point is `historical_demo_anomaly_records()`'s cross-dataset output, not a same-cow fused record — see M1d below for why.
 - `stage2_rag_assistant/config/` — Stage 2 pipeline config (`default.yaml` + pydantic loader). `llm.provider: fake` by default; `openrouter.yaml` is the real-provider config (see above).
 - `stage2_rag_assistant/llm/` — the `LLMClient` protocol, a factory (`fake` and `openrouter` work today; `anthropic`/`openai`/`google` still raise `NotImplementedError`), `providers/fake_provider.py`, and `providers/openrouter_provider.py` (stdlib `urllib`, no SDK dependency — reads `OPENROUTER_API_KEY` from the environment only, never from config).
 - `stage2_rag_assistant/kb/` — the SQLite knowledge base: `schema.sql`, an editable `seed_data/shift_categories.yaml` (the actual source of truth — edit this, not the built DB), and `build_kb.py`. The built `kb.sqlite3` is gitignored.
 - `stage2_rag_assistant/pipeline/` — the 5 pipeline stages (`record_assembler`, `intent_router`, `retriever`, `generator`, `fallback_gate`) plus `response_builder`/`audit_log`, wired end to end by `orchestrator.run_pipeline()`.
-- `stage2_rag_assistant/eval/` — the Layer 2 (Ragas) eval harness: a fake judge LLM/embedding (`ragas_llm.py`/`ragas_embeddings.py`, same deferred-provider policy as `llm/`), field mapping + scoring (`metrics.py`), a 24-case golden set under `golden/` (17 mock-derived + 7 hand-written adversarial — `real_cases.jsonl`/`injected_cases.jsonl` need real Stage 1 output and are deliberately not created yet), and `run_eval.py`. Read `_ragas_compat.py` before touching anything that imports `ragas` directly.
+- `stage2_rag_assistant/historical_application.py` — `historical-anomaly-rag`, the pinned-model public-data application command.
+- `stage2_rag_assistant/eval/` — the derived 24 real workflow + 24 injected + 7 adversarial golden-set builder and the separate Layer 2 Ragas harness. The Ragas judge remains fake/deferred.
 - `stage2_rag_assistant/golden_loading.py` — shared golden-set loading (`load_cases`/`query_for`), used by both `eval/` and `calibration/` — lives here rather than nested under either since both depend on it equally.
-- `stage2_rag_assistant/calibration/` — the τ-calibration prototype (PRD Section 10 steps 1-3 only): a deterministic calibration/test split of the golden set, confidence bucketing, and the LLM's own per-bucket empirical accuracy (`bucketing.py`), run via `tune_threshold.py`. Never writes to `config/default.yaml`'s real `tau` — steps 4-6 need real Stage 1 output (Integration Point), not this milestone.
+- `stage2_rag_assistant/calibration/` — scenario-grouped reporting for the fixed `τ = 0.70` operational demo gate. It reports workflow behavior, not clinical calibration or detection accuracy.
 - `stage2_rag_assistant/api/` — not created yet; see `LLM_ASSISTANT_STATUS.md` for what's next.
 
-## M1a — WASP six-axis behaviour benchmark
+## M1a — approved historical WASP model
 
-`.venv/bin/behavior-classifier` rebuilds a four-state XGBoost classifier from public WASP source CSVs. It reads only the six MPU9250 acceleration/gyroscope columns, makes 50-sample (5-second) windows at 10 Hz with a 25-sample stride, and produces 112 deterministic statistical/spectral features. It has no import from the older repository `src/ml` code.
+The application uses only the checked-in native friend XGBoost model and its pinned SHA-256. It reads the model’s 25-channel WASP feature contract, validates timestamps, strict ordering, 10 Hz cadence, and gaps, and predicts in bounded batches. It never loads the legacy pickle or exposes a model-path override.
 
-The internal class order is contiguous for XGBoost: resting, grazing, walking, miscellaneous. Output is decoded to the platform-safe behaviour codes `0`, `1`, `3`, and `5`; miscellaneous is never treated as Restless (`4`). The reported maximum class probability is explicitly **uncalibrated**.
-
-**This repo's own from-scratch benchmark is real, but its real result fails its own eligibility gate** (mean LOCO macro F1 0.63 against a required ≥0.85 — see `benchmark_report.json` from an actual run). The accepted M1a deliverable going forward is instead a pre-trained external reference model — see "Historical dataset application mode" below — since this project will never have labeled collar-cow data to train and properly LOCO-validate a same-cow model. The from-scratch pipeline below is kept as real, working, honestly-negative evidence, not deleted.
-
-Start with a no-write check of the local public data. The attached friend-supplied `.pkl` may be mentioned only as an inspection reference: it is hashed but never loaded or deserialized.
-
-```bash
-.venv/bin/behavior-classifier preflight \
-  --dataset-dir /Users/taherpanbiharwala/Desktop/IoT/db-cow-walking \
-  --legacy-pickle /Users/taherpanbiharwala/Downloads/cow_behavior_xgboost.pkl
-```
-
-The preflight reports only derived counts, class/cow support, timing-gap exclusions, and a combined source hash. It must pass before training. The expected public layout has `Resting`, `Grazing`, `Walking`, and `Miscellaneous behaviors` label directories and CSVs with `Time` plus the six `MPU9250_*` channels.
-
-Run the grouped public benchmark into a new directory:
-
-```bash
-.venv/bin/behavior-classifier benchmark \
-  --dataset-dir /Users/taherpanbiharwala/Desktop/IoT/db-cow-walking \
-  --output-dir /Users/taherpanbiharwala/Desktop/wasp-behavior-benchmark-001 \
-  --legacy-pickle /Users/taherpanbiharwala/Downloads/cow_behavior_xgboost.pkl
-```
-
-This uses nested leave-one-cow-out (LOCO): each cow is held out once, tuning uses only the remaining cows, and the primary score is the unweighted mean of outer-fold macro F1 over classes actually present in each held-out cow. It also reports pooled out-of-fold F1, class support/recall (`null` when a held-out cow has no support), confusion matrix, and fixed-seed cow-level uncertainty.
-
-The published `0.9625` random-split result is stored as a reference only; it is not a LOCO target. A native JSON artifact is created only if this provisional **public-benchmark** gate passes: mean LOCO macro F1 ≥0.85 plus pooled Walking and Miscellaneous recall ≥0.75. Passing this gate is not collar, farm, health, or clinical validation. **The real run against the real dataset did not pass this gate** (0.63 macro F1, 0.15 miscellaneous recall) — no artifact was produced, which is the expected, correct behavior of a failed gate, not a bug.
-
-Benchmark output never contains raw IMU rows or feature matrices:
-
-- `benchmark_report.json`, `fold_metrics.jsonl`, `class_metrics.json`, `confusion_matrix.json`, and `uncertainty.json` — grouped evaluation evidence.
-- `dataset_provenance.json` — aggregate hashes and counts only.
-- `behavior_model.json` and `behavior_model.manifest.json` — native XGBoost JSON plus feature/class/window/provenance/hash contract, only if the benchmark gate passes.
-
-Verify a qualifying artifact before any inference:
-
-```bash
-.venv/bin/behavior-classifier verify-artifact \
-  --model-path /Users/taherpanbiharwala/Desktop/wasp-behavior-benchmark-001/behavior_model.json
-```
-
-`.pkl`/`.pickle` paths are rejected with `LEGACY_PICKLE_REJECTED`. Model tampering, changed features, unsupported manifest versions, non-finite values, and invalid probability shapes all fail closed with an actionable JSON error.
+Its four output states are resting, grazing, walking, and miscellaneous; miscellaneous is always safe `Other/Unknown`, never Restless. Its maximum probability is uncalibrated. This result is historical public-dataset context only, not collar validation, a cow-day measurement, or clinical evidence.
 
 ## M1d — future same-cow daily fusion
 
@@ -118,22 +80,56 @@ For a future compatible deployment, the workflow would be:
 
 Fusion copies the CUSUM flag, score, physiology values, and literal drivers unchanged. Behaviour is context only in this release: it does not alter the score or add `behavior_state` as a driver. Records use the end of the local day converted to UTC and retain the prior three successfully fused records for the same cow. The Stage 2 record assembler already consumes the resulting shared `AnomalyRecord` schema without a code change.
 
-### Historical dataset application mode — the accepted M1a/Integration Point mechanism
+### Historical application — the Integration Point
 
-The application runs from the public datasets already staged locally. `historical-demo-records` uses the accepted reference XGBoost model (`stage1_anomaly_detection/behavior_classifier/reference_model/`, see that directory's own README for its full provenance and caveats) to classify the public WASP recordings, then attaches the resulting **dataset-level historical behavior summary** to each independently-derived MmCows CUSUM `AnomalyRecord`.
+`historical-anomaly-rag` is the only supported public-data application workflow. It pins the checked-in friend model internally, selects exactly 11 flagged CUSUM monitoring rows plus 13 distributed non-flag controls, and uses OpenRouter to generate grounded explanations.
 
 ```bash
-.venv/bin/behavior-classifier historical-demo-records \
+# Read-only: no output directory, no network call, no OpenRouter charge.
+.venv/bin/historical-anomaly-rag preflight \
   --wasp-dataset-dir /Users/taherpanbiharwala/Desktop/IoT/db-cow-walking \
-  --model-path stage1_anomaly_detection/behavior_classifier/reference_model/cow_behavior_xgboost_reference.json \
-  --manifest-path stage1_anomaly_detection/behavior_classifier/reference_model/cow_behavior_xgboost_reference.manifest.json \
+  --cusum-windows-jsonl /Users/taherpanbiharwala/Desktop/MmCows-anomaly-results/run-002-with-immu/anomaly_windows.jsonl
+
+# This command makes paid OpenRouter calls. Set OPENROUTER_API_KEY first.
+.venv/bin/historical-anomaly-rag run \
+  --wasp-dataset-dir /Users/taherpanbiharwala/Desktop/IoT/db-cow-walking \
   --cusum-windows-jsonl /Users/taherpanbiharwala/Desktop/MmCows-anomaly-results/run-002-with-immu/anomaly_windows.jsonl \
-  --deployment-id mmcows-public-2023 \
-  --timezone America/Chicago \
-  --output-dir /Users/taherpanbiharwala/Desktop/MmCows-anomaly-results/historical-xgboost-demo-001
+  --output-dir /Users/taherpanbiharwala/Desktop/MmCows-anomaly-results/historical-rag-001
 ```
 
-The output has `anomaly_records.jsonl`, `historical_behavior_summary.json`, and `summary.json`. It emits the flagged MmCows monitoring-day records (a real run produced 11), because the seven baseline days deliberately have no CUSUM deviations and must not be imputed. Every record explicitly carries `behavior_context_source="wasp_public_historical_dataset"` and `behavior_context_relation="cross_dataset_historical_demo"`. This makes the behavior result visible to the application without claiming that a WASP behavior prediction belongs to a MmCows cow or date. CUSUM is still the only source of the anomaly flag, score, and drivers.
+`run` requires a new output directory and atomically writes only five derived artifacts: `anomaly_records.jsonl`, `explanations.jsonl`, `historical_behavior_summary.json`, `audit.jsonl`, and `run_manifest.json`. `HistoricalBehaviorContext` is kept separate from the normal cow-day behaviour fields, so a global WASP aggregate cannot be mistaken for the named MmCows cow’s 24-hour behaviour. It does not change CUSUM’s flag, score, or drivers, and is never supplied to the LLM as evidence about that cow/day.
+
+Validation failures write `{code,message,details}` to stderr and exit `2`. Provider/key/network failures use redacted `OPENROUTER_*` codes and exit `3`; no partial final output is published.
+
+### Build the 55-case evaluation corpus
+
+Re-run the bundled four-day injection template once to create the 24 configured injected/control windows. Then build the derived corpus from the normal CUSUM run, injected CUSUM run, and historical summary produced above:
+
+```bash
+.venv/bin/python -m stage2_rag_assistant.eval.build_historical_golden_cases \
+  --real-cusum-windows-jsonl /Users/taherpanbiharwala/Desktop/MmCows-anomaly-results/run-002-with-immu/anomaly_windows.jsonl \
+  --injected-cusum-windows-jsonl /Users/taherpanbiharwala/Desktop/MmCows-anomaly-results/injection-check-003/anomaly_windows.jsonl \
+  --historical-behavior-summary /Users/taherpanbiharwala/Desktop/MmCows-anomaly-results/historical-rag-001/historical_behavior_summary.json \
+  --injection-config stage1_anomaly_detection/baseline_spc_cusum/config/injection_template.json \
+  --output-dir /Users/taherpanbiharwala/Desktop/MmCows-anomaly-results/historical-golden-001
+
+.venv/bin/python -m stage2_rag_assistant.calibration.tune_threshold \
+  --golden-file /Users/taherpanbiharwala/Desktop/MmCows-anomaly-results/historical-golden-001/real_cases.jsonl \
+  --golden-file /Users/taherpanbiharwala/Desktop/MmCows-anomaly-results/historical-golden-001/injected_cases.jsonl \
+  --golden-file /Users/taherpanbiharwala/Desktop/MmCows-anomaly-results/historical-golden-001/adversarial_cases.jsonl \
+  --pipeline-config stage2_rag_assistant/config/openrouter.yaml
+```
+
+This has 24 real workflow cases, 24 exact injected/control cases, and 7 adversarial cases. Injection scenarios, rather than days, are split between calibration and held-out reporting. `τ = 0.70` is a user-selected balanced operational demo gate; it is not clinical calibration, a false-positive rate, or a disease claim. The Ragas judge is still fake/deferred, so keep Layer 2 results separate from the mechanical workflow report.
+
+For the separate Layer 2 Ragas-quality report, pass the same three files explicitly. The example below intentionally uses the fake pipeline, so it makes no additional OpenRouter calls; it checks pipeline plumbing and grounded-response quality, not real-provider quality.
+
+```bash
+.venv/bin/python -m stage2_rag_assistant.eval.run_eval \
+  --golden-file /Users/taherpanbiharwala/Desktop/MmCows-anomaly-results/historical-golden-001/real_cases.jsonl \
+  --golden-file /Users/taherpanbiharwala/Desktop/MmCows-anomaly-results/historical-golden-001/injected_cases.jsonl \
+  --golden-file /Users/taherpanbiharwala/Desktop/MmCows-anomaly-results/historical-golden-001/adversarial_cases.jsonl
+```
 
 ## M1b — MmCows daily personal-baseline detector
 
@@ -203,7 +199,7 @@ Injections operate only on derived monitoring-day features after the immutable b
   --injection-config stage1_anomaly_detection/baseline_spc_cusum/config/injection_template.json
 ```
 
-Each scenario has a `cow_id`, `start_date`, positive `duration_days`, and `changes`. A change names one literal detector signal and its signed baseline-relative target deviation. Use `+2.5` for a CBT increase, `-2.5` for a lying-time or activity decrease, and an empty `changes` list for an explicit clean control. A sustained ±2.5σ target for three days contributes 2 CUSUM units/day and crosses the conservative `h=5` threshold on day three. The bundled template exercises CBT rise, both lying-time directions, activity drop, a combined change, and a clean control.
+Each scenario has a `cow_id`, `start_date`, positive `duration_days`, and `changes`. A change names one literal detector signal and its signed baseline-relative target deviation. Use `+2.5` for a CBT increase, `-2.5` for a lying-time or activity decrease, and an empty `changes` list for an explicit clean control. A sustained ±2.5σ target contributes 2 CUSUM units/day and crosses the conservative `h=5` threshold on day three. The bundled four-day template produces 24 exact injected/control windows across CBT rise, both lying-time directions, activity drop, a combined change, and a clean control.
 
 Real MmCows smoke results should report dataset coverage and mechanical detection behaviour only—never disease prevalence, clinical accuracy, or false-positive rates without verified health labels.
 

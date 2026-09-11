@@ -3,7 +3,7 @@
 **For:** anyone maintaining or integrating the completed per-cow statistical baseline / anomaly-detection half of Stage 1.
 **What it does, in one sentence:** for each cow, learn a personal *reference period* from the MmCows dataset, then flag and score sustained deviations using SPC/CUSUM.
 **Last updated:** 2026-09-11
-**Status:** M1b and M1c are complete. The implementation lives in [`cattle-anomaly-assistant/stage1_anomaly_detection/baseline_spc_cusum/`](cattle-anomaly-assistant/stage1_anomaly_detection/baseline_spc_cusum/), is fixture-tested, and has passed real MmCows smoke and injection tests. M1d schema fusion remains a later joint task.
+**Status:** M1b and M1c are complete. The implementation lives in [`cattle-anomaly-assistant/stage1_anomaly_detection/baseline_spc_cusum/`](cattle-anomaly-assistant/stage1_anomaly_detection/baseline_spc_cusum/), is fixture-tested, and has passed real MmCows smoke and injection tests. Same-cow M1d fusion remains permanently fail-closed; the implemented public-data application instead consumes its CUSUM output through `historical-anomaly-rag` with explicitly separate WASP historical context.
 
 ---
 

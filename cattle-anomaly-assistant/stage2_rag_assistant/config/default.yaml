@@ -14,11 +14,9 @@ generation:
   max_retries: 1  # FR-9: one retry on malformed output, then fallback_insufficient_data
 
 fallback:
-  # PLACEHOLDER — NOT CALIBRATED. M2c prototyped the bucketing mechanism (PRD
-  # Section 10 steps 1-3) against mock data — see calibration/tune_threshold.py.
-  # Steps 4-6 (the real tau) still need real Stage 1 output — Integration
-  # Point milestone, not M2c.
-  tau: 0.6
+  # User-selected balanced operational demo gate. It is reported against the
+  # scenario-grouped historical/injection holdout, never as clinical calibration.
+  tau: 0.7
   high_severity_margin: 0.3
 
 kb:

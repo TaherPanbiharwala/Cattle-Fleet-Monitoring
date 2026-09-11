@@ -25,9 +25,8 @@ generation:
   max_retries: 1  # FR-9: one retry on malformed output, then fallback_insufficient_data
 
 fallback:
-  # Same placeholder as default.yaml — still not calibrated (M2c is a
-  # prototype on mock data; see calibration/tune_threshold.py).
-  tau: 0.6
+  # Same user-selected balanced operational demo gate as default.yaml.
+  tau: 0.7
   high_severity_margin: 0.3
 
 kb:

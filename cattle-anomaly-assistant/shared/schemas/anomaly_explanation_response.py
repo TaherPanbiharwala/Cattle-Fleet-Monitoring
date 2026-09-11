@@ -42,6 +42,11 @@ class AnomalyExplanationResponse(StrictModel):
     contributing_signals: list[str] = Field(default_factory=list)
     suggested_next_step: str
 
+    # Present only when the input record carries an independent public-data
+    # historical context. The generator never receives that context, so this
+    # fixed disclosure cannot become fabricated cow/day evidence.
+    historical_context_disclaimer: str | None = None
+
     stage1_output: Stage1OutputSummary
     disagreement_flag: bool
 

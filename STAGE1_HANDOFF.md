@@ -4,6 +4,8 @@
 **Your job, in one sentence:** maintain a public-data XGBoost behavior benchmark and the fail-closed contract that can later fuse it with same-cow runtime CUSUM context.
 **Last updated:** 2026-09-11
 
+> **Current integration boundary:** the checked-in friend XGBoost JSON model is the only approved public WASP model for the historical application. `historical-anomaly-rag` now uses it beside selected MmCows CUSUM indicators, while keeping a fixed disclosure that the WASP result is not measured behaviour for the named MmCows cow or day. Do not substitute the model or use the legacy pickle.
+
 ---
 
 ## 1. The 60-second version of what this project is
@@ -48,7 +50,7 @@ The model emits derived per-window state/confidence and daily contexts with the 
 
 WASP and MmCows cannot be joined, even though both are public cattle datasets. The fusion contract requires an exact `(cow_id, local_date, timezone, deployment_id)` match and `same_cow_runtime` provenance from both sources. It rejects public `wasp_public` / `mmcows_public` inputs before writing output. Test fixtures exercise the schema path; they are not a field-ready data source.
 
-For the public-data-only application mode, use `historical-demo-records` instead of `fuse-daily`. It runs the active Kaggle 25-channel XGBoost model over the staged WASP data and attaches its **dataset-level historical behavior summary** to flagged MmCows CUSUM records. The resulting `AnomalyRecord`s explicitly declare `behavior_context_source="wasp_public_historical_dataset"` and `behavior_context_relation="cross_dataset_historical_demo"`; they do not claim the behavior belongs to the MmCows cow/date. CUSUM remains the only source of the anomaly flag, score, and driving signals. See the assistant README for the command.
+For the public-data-only application mode, use `historical-anomaly-rag` instead of `fuse-daily`. Its read-only `preflight` validates the pinned model, WASP time/cadence contract, selected derived CUSUM rows, and KB; `run` explicitly makes the paid OpenRouter calls and atomically emits the record/explanation bundle. Resulting records explicitly declare `behavior_context_source="wasp_public_historical_dataset"` and `behavior_context_relation="cross_dataset_historical_demo"`; their `HistoricalBehaviorContext` is not behaviour for the MmCows cow/date, and its disclaimer is copied to the final explanation. CUSUM remains the only source of the anomaly flag, score, and driving signals. See the assistant README for commands.
 
 ## 5. Commands and verification
 

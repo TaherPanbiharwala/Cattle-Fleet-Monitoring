@@ -1,24 +1,9 @@
-"""CLI + importable run() for PRD Section 10's calibration steps 1-3 only.
+"""Scenario-grouped reporting for the fixed historical-application gate.
 
-Full calibration is 6 steps: (1) hold out a calibration split from the
-golden set, separate from a test split; (2) run the pipeline, bucket
-responses by stated confidence; (3) compute empirical accuracy per
-bucket; (4) compute Stage 1's own accuracy on the identical slice; (5)
-set tau to the lowest bucket where LLM accuracy >= Stage 1's; (6)
-re-validate on the test split. Steps 4-6 need real Stage 1 output that
-doesn't exist yet (Stage 1 is still with its collaborators) — this module
-implements 1-3 only, prototyped on the mock golden set.
-
-Deliberately does NOT compute step 4, even though "Stage 1's own
-accuracy" is technically possible on the current mock golden set: every
-mock-derived case was built with input_record.anomaly_flag already
-matching gold_anomaly_flag, so that number would trivially compute to
-~100% — a real-looking but meaningless figure. PRD's own words: "Stage
-1's accuracy on mocked data is meaningless." This module never reports
-or even computes anything shaped like a Stage-1-accuracy figure.
-
-Never writes to config/default.yaml's real tau — reads it read-only, for
-context in the report.
+This runner records raw pre-gate Stage 2 responses, confidence buckets, and
+an untouched scenario-held-out slice. The configured tau is the explicit
+user-selected 0.70 operational demo policy; it is never reported as clinical
+calibration or as CUSUM detection accuracy.
 """
 
 from __future__ import annotations
@@ -43,11 +28,8 @@ _HERE = Path(__file__).parent
 DEFAULT_REPORTS_DIR = _HERE / "reports"
 
 _HEADER = (
-    "Stage 2 tau-Calibration — PRD Section 10 steps 1-3 ONLY (hold out a calibration split, bucket "
-    "responses by stated confidence, compute the LLM's own empirical accuracy per bucket). Steps 4-6 "
-    "(Stage 1's own accuracy on the identical slice, setting tau, re-validating on the test split) need "
-    "real Stage 1 output and are separate, later scope (PRD Section 14 Integration Point). Nothing in "
-    "this report is a calibrated tau — config/default.yaml's tau is untouched."
+    "Stage 2 historical-application threshold report — scenario-grouped confidence and held-out workflow "
+    "reporting for the fixed 0.70 operational demo gate. It is not a clinical calibration or detection-accuracy result."
 )
 
 
@@ -72,46 +54,64 @@ def run(
     calibration_cases, test_cases = split_calibration_test(cases)
     llm_client = llm_client or build_llm_client(pipeline_config.llm)
 
-    results: list[CalibrationCaseResult] = []
-    excluded_by_path: dict[str, int] = {}
+    def evaluate_split(cases_for_split: list, split_name: str) -> tuple[list[CalibrationCaseResult], dict[str, int], list[dict]]:
+        results: list[CalibrationCaseResult] = []
+        excluded_by_path: dict[str, int] = {}
+        raw: list[dict] = []
+        for case in cases_for_split:
+            response = run_pipeline(case.input_record, query_for(case), config=pipeline_config, llm_client=llm_client)
+            raw.append(
+                {
+                    "case_id": case.case_id,
+                    "scenario_id": case.scenario_id or f"legacy:{case.case_id}",
+                    "split": split_name,
+                    "path_taken": response.path_taken,
+                    "confidence": response.confidence,
+                    "disagreement_flag": response.disagreement_flag,
+                }
+            )
+            result = evaluate_case(case, response)
+            if result is None:
+                excluded_by_path[response.path_taken] = excluded_by_path.get(response.path_taken, 0) + 1
+                continue
+            results.append(result)
+        return results, excluded_by_path, raw
 
-    for case in calibration_cases:
-        response = run_pipeline(case.input_record, query_for(case), config=pipeline_config, llm_client=llm_client)
-        result = evaluate_case(case, response)
-        if result is None:
-            excluded_by_path[response.path_taken] = excluded_by_path.get(response.path_taken, 0) + 1
-            continue
-        results.append(result)
-
-    overall_correct = sum(1 for r in results if r.correct)
+    results, excluded_by_path, calibration_raw = evaluate_split(calibration_cases, "calibration")
+    held_out_results, held_out_excluded, held_out_raw = evaluate_split(test_cases, "held_out")
+    overall_correct = sum(1 for result in results if result.correct)
+    held_out_correct = sum(1 for result in held_out_results if result.correct)
     is_demo_mode = pipeline_config.llm.provider == "fake"
 
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "header": _HEADER,
-        "scope_note": "Steps 1-3 only. Steps 4-6 need real Stage 1 output — see this module's docstring.",
+        "scope_note": "The 0.70 gate is a fixed operational demonstration policy. Reports remain separate from Stage 1 detection correctness and clinical claims.",
         "demo_mode": is_demo_mode,
-        "demo_mode_banner": (
-            "DEMO MODE: ran against a fake LLM (no real provider chosen yet, PRD Open Question 2). Its "
-            "default responder returns a fixed 0.75 confidence for every case, so this run will show "
-            "exactly one populated bucket — that's expected, not a bug in the bucketing mechanism. "
-            "Re-run once a real LLM provider lands to see a real confidence distribution."
-        )
-        if is_demo_mode
-        else None,
-        "current_config_tau": pipeline_config.fallback.tau,
+        "demo_mode_banner": "DEMO MODE: responses use the deterministic fake provider. This verifies split/report plumbing only." if is_demo_mode else None,
+        "configured_tau": pipeline_config.fallback.tau,
+        "tau_policy": "balanced operational demo gate; not clinical calibration",
         "total_golden_cases": len(cases),
         "calibration_split_size": len(calibration_cases),
-        "test_split_size": len(test_cases),
-        "test_split_case_ids": [c.case_id for c in test_cases],
+        "held_out_split_size": len(test_cases),
+        "calibration_scenario_ids": sorted({case.scenario_id or f"legacy:{case.case_id}" for case in calibration_cases}),
+        "held_out_scenario_ids": sorted({case.scenario_id or f"legacy:{case.case_id}" for case in test_cases}),
         "excluded_by_path_taken": excluded_by_path,
-        "bucket_stats": [b.model_dump() for b in aggregate_by_bucket(results)],
+        "held_out_excluded_by_path_taken": held_out_excluded,
+        "bucket_stats": [bucket.model_dump() for bucket in aggregate_by_bucket(results)],
         "overall_llm_accuracy": {
             "count": len(results),
             "correct_count": overall_correct,
             "accuracy": (overall_correct / len(results)) if results else None,
         },
-        "per_case": [r.model_dump() for r in results],
+        "held_out_workflow_result": {
+            "count": len(held_out_results),
+            "correct_count": held_out_correct,
+            "accuracy": (held_out_correct / len(held_out_results)) if held_out_results else None,
+        },
+        "raw_pre_gate": [*calibration_raw, *held_out_raw],
+        "per_case": [result.model_dump() for result in results],
+        "held_out_per_case": [result.model_dump() for result in held_out_results],
     }
 
     if write_report:
@@ -133,13 +133,13 @@ def _render_markdown(report: dict) -> str:
         lines += [f"> **{report['demo_mode_banner']}**", ""]
     lines += [
         f"Generated: {report['generated_at']}",
-        f"Current config tau (unchanged): {report['current_config_tau']}",
+        f"Configured operational tau: {report['configured_tau']}",
         f"Total golden cases: {report['total_golden_cases']}",
-        f"Calibration split: {report['calibration_split_size']} | Test split (held out, not run): "
-        f"{report['test_split_size']}",
+        f"Calibration split: {report['calibration_split_size']} | Scenario-held-out split: "
+        f"{report['held_out_split_size']}",
         f"Excluded from calibration (non-llm_grounded): {report['excluded_by_path_taken']}",
         "",
-        "## Empirical accuracy per confidence bucket (LLM's own judgment only — not Stage 1's)",
+        "## Empirical workflow agreement per confidence bucket",
         "",
         "| Bucket | Count | Correct | Accuracy |",
         "|---|---|---|---|",
@@ -149,12 +149,15 @@ def _render_markdown(report: dict) -> str:
         lines.append(f"| {bucket['bucket']} | {bucket['count']} | {bucket['correct_count']} | {accuracy} |")
     overall = report["overall_llm_accuracy"]
     overall_acc = f"{overall['accuracy']:.3f}" if overall["accuracy"] is not None else "n/a"
-    lines += ["", f"Overall LLM accuracy (all buckets combined): {overall_acc} ({overall['correct_count']}/{overall['count']})"]
+    held = report["held_out_workflow_result"]
+    held_acc = f"{held['accuracy']:.3f}" if held["accuracy"] is not None else "n/a"
+    lines += ["", f"Calibration workflow agreement: {overall_acc} ({overall['correct_count']}/{overall['count']})"]
+    lines += [f"Scenario-held-out workflow agreement: {held_acc} ({held['correct_count']}/{held['count']})"]
     return "\n".join(lines)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Prototype PRD Section 10's calibration steps 1-3.")
+    parser = argparse.ArgumentParser(description="Report scenario-grouped workflow agreement for the configured historical-app tau.")
     parser.add_argument("--golden-file", action="append", dest="golden_files", type=Path, default=None)
     parser.add_argument("--pipeline-config", type=Path, default=None)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_REPORTS_DIR)

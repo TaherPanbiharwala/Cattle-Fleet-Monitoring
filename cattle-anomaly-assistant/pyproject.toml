@@ -23,6 +23,7 @@ dev = [
 [project.scripts]
 baseline-spc-cusum = "stage1_anomaly_detection.baseline_spc_cusum.cli:main"
 behavior-classifier = "stage1_anomaly_detection.behavior_classifier.cli:main"
+historical-anomaly-rag = "stage2_rag_assistant.historical_application:main"
 
 [build-system]
 requires = ["setuptools>=68"]

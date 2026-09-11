@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Literal
 
+from pydantic import Field
+
 from ._base import StrictModel
 from .anomaly_record import AnomalyRecord
 
@@ -27,6 +29,13 @@ class GoldenCase(StrictModel):
     case_id: str
     category: Category
     source: Source
+    # New historical/injection builders always set these immutable values.
+    # The defaults retain read support for the superseded checked-in mock
+    # fixtures until a user stages and builds the public-data corpus.
+    scenario_id: str | None = None
+    detector_run_sha256: str | None = Field(default=None, min_length=16)
+    behavior_model_sha256: str | None = Field(default=None, min_length=16)
+    source_config_sha256: str | None = Field(default=None, min_length=16)
     injection_type: str | None = None
     input_record: AnomalyRecord
     query_text: str | None = None
